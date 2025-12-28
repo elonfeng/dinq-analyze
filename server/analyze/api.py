@@ -205,10 +205,27 @@ def create_analysis_job(
     subject_key: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     request_hash: Optional[str] = None,
+    initial_ready: bool = False,
 ) -> tuple[str, bool]:
     normalized_input = normalize_input_payload(source, input_payload or {})
     resolved_subject_key = subject_key or resolve_subject_key(source, normalized_input)
     plan = create_job_cards(source, requested_cards)
+    if initial_ready:
+        # Mark cards with no deps as ready at creation time so runners can start immediately
+        # without requiring an extra release_ready_cards() round trip.
+        for card in plan:
+            try:
+                deps = card.get("depends_on")
+            except Exception:
+                deps = None
+            if deps is None:
+                deps_list: list[str] = []
+            elif isinstance(deps, list):
+                deps_list = [str(d).strip() for d in deps if str(d).strip()]
+            else:
+                deps_list = []
+            if not deps_list:
+                card["status"] = "ready"
     job_id, created = _job_store.create_job_bundle(
         user_id=user_id,
         source=source,
@@ -776,6 +793,54 @@ def analyze():
 
     subject_key = resolve_subject_key(source, normalized_input)
 
+    # Cache pre-check (before creating a job):
+    # - Enables "instant return" when we already have a cached final_result for a stable subject id.
+    # - When cache miss, we can create initial runnable cards as READY to avoid an extra DB round trip.
+    options_hash = compute_options_hash(options or {})
+    pipeline_version = get_pipeline_version()
+    force_refresh = bool((options or {}).get("force_refresh"))
+    cache_hit_payload: Optional[Dict[str, Any]] = None
+    cache_hit_source: Optional[str] = None
+    cache_hit_stale = False
+    cache_hit_cached_at_iso: Optional[str] = None
+
+    if subject_key and is_cacheable_subject(source=source, subject_key=subject_key) and not force_refresh:
+        try:
+            l1_final = _try_get_l1_cached_final_result(
+                source=source,
+                subject_key=subject_key,
+                pipeline_version=pipeline_version,
+                options_hash=options_hash,
+            )
+            if l1_final and isinstance(l1_final.get("payload"), dict) and l1_final.get("payload"):
+                payload = l1_final["payload"]
+                if _is_usable_final_cache_hit(source=source, final_payload=payload, requested_cards=requested_cards):
+                    cache_hit_payload = payload
+                    cache_hit_source = "l1"
+                    cache_hit_stale = bool(l1_final.get("stale"))
+                    cache_hit_cached_at_iso = l1_final.get("cached_at_iso") or datetime.utcnow().isoformat()
+        except Exception:
+            pass
+
+        if cache_hit_payload is None:
+            try:
+                cached = _analysis_cache.get_cached_final_result(
+                    source=source,
+                    subject_key=subject_key,
+                    pipeline_version=pipeline_version,
+                    options_hash=options_hash,
+                )
+                if cached and isinstance(cached.get("payload"), dict) and cached.get("payload"):
+                    payload = cached.get("payload") or {}
+                    if _is_usable_final_cache_hit(source=source, final_payload=payload, requested_cards=requested_cards):
+                        created_at = cached.get("created_at") if isinstance(cached.get("created_at"), datetime) else None
+                        cache_hit_payload = payload
+                        cache_hit_source = "db"
+                        cache_hit_stale = bool(cached.get("stale"))
+                        cache_hit_cached_at_iso = (created_at or datetime.utcnow()).isoformat()
+            except Exception:
+                pass
+
     idempotency_key = _read_idempotency_key()
     if idempotency_key and len(idempotency_key) > 128:
         return jsonify({"success": False, "error": "Idempotency-Key too long (max 128 chars)"}), 400
@@ -796,6 +861,7 @@ def analyze():
             subject_key=subject_key or None,
             idempotency_key=idempotency_key or None,
             request_hash=request_hash,
+            initial_ready=(cache_hit_payload is None),
         )
     except ValueError as exc:
         if str(exc) == "idempotency_key_conflict":
@@ -822,97 +888,52 @@ def analyze():
             pass
 
     if mode == "sync":
+        if created and cache_hit_payload is not None:
+            _complete_job_from_cached_final_result(
+                job_id=job_id,
+                source=source,
+                final_payload=cache_hit_payload,
+                cached_at_iso=cache_hit_cached_at_iso,
+                stale=bool(cache_hit_stale),
+            )
         payload, status = run_sync_job(job_id, source, requested_cards)
         return jsonify(payload), status
 
     # async mode (default): client should use GET .../stream for SSE.
-    options_hash = compute_options_hash(options or {})
-    pipeline_version = get_pipeline_version()
-    force_refresh = bool((options or {}).get("force_refresh"))
-
-    # Cache path:
-    # - If a cached final_result exists (fresh or stale), complete immediately for instant UX.
-    if created and subject_key and is_cacheable_subject(source=source, subject_key=subject_key) and not force_refresh:
-        # Cache: final_result only (contract-only, smaller and safer than full_report).
-        try:
-            l1_final = _try_get_l1_cached_final_result(
-                source=source,
-                subject_key=subject_key,
-                pipeline_version=pipeline_version,
-                options_hash=options_hash,
-            )
-            if l1_final and isinstance(l1_final.get("payload"), dict) and l1_final.get("payload"):
-                payload = l1_final["payload"]
-                if _is_usable_final_cache_hit(source=source, final_payload=payload, requested_cards=requested_cards):
-                    cached_at_iso = l1_final.get("cached_at_iso") or datetime.utcnow().isoformat()
-                    stale = bool(l1_final.get("stale"))
-                    _complete_job_from_cached_final_result(
-                        job_id=job_id,
-                        source=source,
-                        final_payload=payload,
-                        cached_at_iso=cached_at_iso,
-                        stale=stale,
-                    )
-                    return jsonify(
-                        {
-                            "success": True,
-                            "job_id": job_id,
-                            "status": "completed",
-                            "cache_hit": True,
-                            "cache_stale": stale,
-                            "cache_source": "l1",
-                            "idempotent_replay": False,
-                        }
-                    )
-        except Exception:
-            pass
-
-        try:
-            cached = _analysis_cache.get_cached_final_result(
-                source=source,
-                subject_key=subject_key,
-                pipeline_version=pipeline_version,
-                options_hash=options_hash,
-            )
-            if cached and isinstance(cached.get("payload"), dict) and cached.get("payload"):
-                payload = cached.get("payload") or {}
-                if _is_usable_final_cache_hit(source=source, final_payload=payload, requested_cards=requested_cards):
-                    created_at = cached.get("created_at") if isinstance(cached.get("created_at"), datetime) else None
-                    cached_at_iso = (created_at or datetime.utcnow()).isoformat()
-                    stale = bool(cached.get("stale"))
-                    _complete_job_from_cached_final_result(
-                        job_id=job_id,
-                        source=source,
-                        final_payload=payload,
-                        cached_at_iso=cached_at_iso,
-                        stale=stale,
-                    )
-                    return jsonify(
-                        {
-                            "success": True,
-                            "job_id": job_id,
-                            "status": "completed",
-                            "cache_hit": True,
-                            "cache_stale": stale,
-                            "cache_source": "db",
-                            "idempotent_replay": False,
-                        }
-                    )
-        except Exception:
-            pass
+    if created and cache_hit_payload is not None:
+        _complete_job_from_cached_final_result(
+            job_id=job_id,
+            source=source,
+            final_payload=cache_hit_payload,
+            cached_at_iso=cache_hit_cached_at_iso,
+            stale=bool(cache_hit_stale),
+        )
+        return jsonify(
+            {
+                "success": True,
+                "job_id": job_id,
+                "status": "completed",
+                "cache_hit": True,
+                "cache_stale": bool(cache_hit_stale),
+                "cache_source": cache_hit_source,
+                "idempotent_replay": False,
+            }
+        )
 
     if api_should_start_scheduler():
         init_scheduler()
-    try:
-        _job_store.release_ready_cards(job_id)
-    except Exception:
-        pass
-    job = _job_store.get_job(job_id)
+    # Backward compat: idempotency replays may point at older jobs whose initial cards were created as pending.
+    if not created:
+        try:
+            _job_store.release_ready_cards(job_id)
+        except Exception:
+            pass
+    job = _job_store.get_job(job_id) if (not created) else None
     return jsonify(
         {
             "success": True,
             "job_id": job_id,
-            "status": getattr(job, "status", None) or "queued",
+            "status": (getattr(job, "status", None) if job is not None else "queued") or "queued",
             "idempotent_replay": (not created) if idempotency_key else False,
         }
     )
