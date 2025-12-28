@@ -25,6 +25,7 @@ from server.tasks.analysis_cache_store import AnalysisCacheStore
 from server.tasks.job_store import JobStore
 from server.tasks.event_store import EventStore
 from server.tasks.output_schema import extract_output_parts
+from server.utils.json_clean import prune_empty
 from server.utils.timing import elapsed_ms, now_perf
 
 
@@ -238,6 +239,16 @@ class CardScheduler:
             except Exception:
                 pass
             return {"data": {}, "stream": {}}
+
+        # Final output hygiene: remove null/empty fields so the frontend never sees blank placeholders.
+        # If pruning would drop the entire payload (unexpected), keep the original output to avoid
+        # turning a usable card into `{}`.
+        try:
+            cleaned = prune_empty(output)
+            if cleaned is not None:
+                output = cleaned
+        except Exception:
+            pass
 
         if self._event_store.redis_enabled():
             try:

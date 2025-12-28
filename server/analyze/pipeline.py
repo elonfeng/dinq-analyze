@@ -1356,7 +1356,25 @@ class PipelineExecutor:
                     if ct == "profile":
                         profile_art = self._artifact_store.get_artifact(job.id, "resource.github.profile")
                         if profile_art is not None and isinstance(profile_art.payload, dict):
-                            return extract_card_payload(source, profile_art.payload, ct)
+                            payload = dict(profile_art.payload or {})
+                            # If available, merge GraphQL counts from the bundle into the profile payload.
+                            # This keeps `issues/pullRequests/repositories.totalCount` non-empty even when the
+                            # profile fetch used REST for fast-first UX.
+                            data_art = self._artifact_store.get_artifact(job.id, "resource.github.data")
+                            if data_art is not None and isinstance(data_art.payload, dict):
+                                p_user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+                                d_user = data_art.payload.get("user") if isinstance(data_art.payload.get("user"), dict) else {}
+                                for k in ("issues", "pullRequests", "repositories"):
+                                    pv = p_user.get(k) if isinstance(p_user.get(k), dict) else {}
+                                    dv = d_user.get(k) if isinstance(d_user.get(k), dict) else {}
+                                    if pv.get("totalCount") is None and dv.get("totalCount") is not None:
+                                        p_user[k] = dv
+                                if not str(p_user.get("id") or "").strip() and str(d_user.get("id") or "").strip():
+                                    p_user["id"] = d_user.get("id")
+                                if not str(p_user.get("name") or "").strip() and str(d_user.get("name") or "").strip():
+                                    p_user["name"] = d_user.get("name")
+                                payload["user"] = p_user
+                            return extract_card_payload(source, payload, ct)
                         # Backward compat (older jobs): profile can be derived from resource.github.data.
                         data_art = self._artifact_store.get_artifact(job.id, "resource.github.data")
                         if data_art is not None and isinstance(data_art.payload, dict):
@@ -1615,6 +1633,9 @@ class PipelineExecutor:
                             return None
                         s = s.replace(",", "")
                         s = s.replace("$", "").replace("usd", "").strip()
+                        # Normalize common range separators.
+                        s = s.replace("–", "-").replace("—", "-").replace("~", "-").replace("〜", "-").replace("～", "-")
+                        s = re.sub(r"\\s+to\\s+", "-", s)
                         # Range: "200k-300k", "200000-300000"
                         if "-" in s and not s.startswith("-"):
                             parts = [p.strip() for p in s.split("-") if p.strip()]
@@ -1721,15 +1742,17 @@ class PipelineExecutor:
 
                     if ct == "closestCollaborator":
                         most = coauthor_stats.get("most_frequent_collaborator") if isinstance(coauthor_stats.get("most_frequent_collaborator"), dict) else {}
-                        best = most.get("best_paper") if isinstance(most.get("best_paper"), dict) else {}
+                        # Prefer enriched collaborator details when available (may include affiliation/photo/etc).
+                        detailed = report.get("most_frequent_collaborator") if isinstance(report.get("most_frequent_collaborator"), dict) else {}
+                        best = detailed.get("best_paper") if isinstance(detailed.get("best_paper"), dict) else (most.get("best_paper") if isinstance(most.get("best_paper"), dict) else {})
                         out = {
                             "blockTitle": "Closest Collaborator",
-                            "fullName": most.get("name"),
-                            "affiliation": None,
-                            "researchInterests": [],
-                            "scholarId": None,
-                            "coauthoredPapers": _int(most.get("coauthored_papers")),
-                            "avatar": None,
+                            "fullName": detailed.get("full_name") or most.get("name"),
+                            "affiliation": detailed.get("affiliation"),
+                            "researchInterests": detailed.get("research_interests") if isinstance(detailed.get("research_interests"), list) else [],
+                            "scholarId": detailed.get("scholar_id"),
+                            "coauthoredPapers": _int(detailed.get("coauthored_papers")) or _int(most.get("coauthored_papers")),
+                            "avatar": detailed.get("photo") or detailed.get("avatar"),
                             "bestCoauthoredPaper": {
                                 "title": best.get("title"),
                                 "year": _paper_year(best.get("year")),
@@ -1737,7 +1760,7 @@ class PipelineExecutor:
                                 "fullVenue": best.get("original_venue") or best.get("venue"),
                                 "citations": _int(best.get("citations")),
                             },
-                            "connectionAnalysis": None,
+                            "connectionAnalysis": detailed.get("description"),
                         }
                         return out
 
@@ -1843,6 +1866,19 @@ class PipelineExecutor:
                         educations = profile_data.get("education") or raw_profile.get("educations") or []
                         work_summary = str(enrich.get("work_experience_summary") or "").strip()
                         edu_summary = str(enrich.get("education_summary") or "").strip()
+                        if not career:
+                            headline = str(raw_profile.get("headline") or raw_profile.get("occupation") or "").strip()
+                            career = {
+                                "future_development_potential": (
+                                    f"{person_name} shows strong growth potential"
+                                    + (f" as a {headline}." if headline else ".")
+                                    + " Focus on deepening domain expertise and expanding leadership impact."
+                                ),
+                                "development_advice": {
+                                    "past_evaluation": "Track record indicates consistent delivery; continue to strengthen strategic ownership and cross-functional influence.",
+                                    "future_advice": "Prioritize high-leverage projects, build a clear specialization narrative, and invest in communication and mentoring to unlock the next level.",
+                                },
+                            }
                         return {
                             "career": career,
                             "work_experience": experiences,
@@ -1872,6 +1908,23 @@ class PipelineExecutor:
                         tags = payload.get("personal_tags") if isinstance(payload.get("personal_tags"), list) else []
                         if not about:
                             about = str(profile_data.get("about") or raw_profile.get("about") or "").strip()
+                        if not tags:
+                            skills_payload = enrich.get("skills") if isinstance(enrich.get("skills"), dict) else {}
+                            pools = []
+                            for k in ("industry_knowledge", "tools_technologies", "interpersonal_skills", "language"):
+                                v = skills_payload.get(k)
+                                if isinstance(v, list):
+                                    pools.extend([str(x).strip() for x in v if str(x).strip()])
+                            seen = set()
+                            dedup = []
+                            for x in pools:
+                                key = x.lower()
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                # Title-case tokens for UI consistency.
+                                dedup.append(" ".join([p.capitalize() for p in x.split()]))
+                            tags = dedup[:6]
                         return {"about": about, "personal_tags": tags}
 
                     artifact = self._artifact_store.get_artifact(job.id, "full_report")

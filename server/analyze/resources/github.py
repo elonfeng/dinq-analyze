@@ -96,6 +96,42 @@ def fetch_github_profile(*, login: str, progress: Optional[ProgressFn] = None) -
         status = "rest"
         emit("timing.github.profile_rest", "GitHub profile fetched (REST)", {"duration_ms": elapsed_ms(t0)})
 
+    # Fill missing count fields (issues/PRs) via a small GraphQL query.
+    # REST is faster but doesn't expose these totals; the unified frontend schema expects them.
+    if user and not _has_counts(user):
+        try:
+            fill_timeout = float(os.getenv("DINQ_GITHUB_PROFILE_GRAPHQL_FILL_TIMEOUT_SECONDS", "3") or "3")
+        except Exception:
+            fill_timeout = 3.0
+        fill_timeout = max(0.0, min(fill_timeout, 20.0))
+        if fill_timeout > 0:
+            emit("profile_fetch_graphql_fill", f"Filling GitHub profile counts for {login}...", {"timeout_seconds": fill_timeout})
+            t_fill = now_perf()
+            gql_user = None
+            try:
+                async def _run_graphql_fill() -> Optional[Dict[str, Any]]:
+                    github = GithubClient({"token": token})
+                    try:
+                        return await asyncio.wait_for(github.profile(login), timeout=float(fill_timeout or 0) or None)
+                    finally:
+                        await github.close()
+
+                gql_user = asyncio.run(_run_graphql_fill())
+            except Exception as exc:  # noqa: BLE001
+                gql_user = None
+                emit("profile_fetch_graphql_fill_failed", "GitHub GraphQL fill failed", {"error": str(exc)[:200]})
+
+            if isinstance(gql_user, dict) and gql_user:
+                for k in ("issues", "pullRequests", "repositories"):
+                    if isinstance(gql_user.get(k), dict) and gql_user.get(k):
+                        user[k] = gql_user.get(k)
+                if str(gql_user.get("id") or "").strip():
+                    user["id"] = gql_user.get("id")
+                if str(gql_user.get("name") or "").strip():
+                    user["name"] = gql_user.get("name")
+                status = "rest+graphql"
+                emit("timing.github.profile_graphql_fill", "GitHub profile counts filled (GraphQL)", {"duration_ms": elapsed_ms(t_fill)})
+
     # Fallback: GraphQL (fills issues/PR counts) if REST fails.
     if not user:
         try:
@@ -475,7 +511,7 @@ def fetch_github_data(
             # Keep `user` compact and compatible; stash bundle-only fields separately.
             user_payload: Dict[str, Any] = {
                 "id": bundle_user.get("id"),
-                "name": bundle_user.get("name"),
+                "name": bundle_user.get("name") or bundle_user.get("login") or login,
                 "login": bundle_user.get("login") or login,
                 "createdAt": bundle_user.get("createdAt"),
                 "bio": bundle_user.get("bio"),
@@ -633,6 +669,16 @@ def fetch_github_data(
                             }
                         },
                     )
+                # If the user has no PR contribution repos, fall back to their own top repos so
+                # the UI never sees an empty top_projects list.
+                if not top_projects:
+                    fallback = []
+                    for repo in top_repos[:10]:
+                        if not isinstance(repo, dict) or not repo:
+                            continue
+                        fallback.append({"pull_requests": 0, "repository": repo})
+                    fallback = _with_item_ids(fallback)
+                    top_projects = fallback or top_projects
                 output["top_projects"] = top_projects
             except Exception:
                 output["top_projects"] = []
