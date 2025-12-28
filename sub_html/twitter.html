@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Twitter Profile Analysis</title>
+  <style>
+    :root {
+      --primary-color: #4CAF50;
+      --primary-light: #81C784;
+      --primary-dark: #388E3C;
+      --secondary-color: #607D8B;
+      --secondary-light: #B0BEC5;
+      --secondary-dark: #455A64;
+      --background-color: #F5F8F5;
+      --card-background: #FFFFFF;
+      --text-primary: #2E3D32;
+      --text-secondary: #546E7A;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      background-color: var(--background-color);
+      color: var(--text-primary);
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      position: relative;
+    }
+    
+    /* Twitter logo 水印样式 */
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      opacity: 0.03;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%231DA1F2' d='M23.643 4.937c-.835.37-1.732.62-2.675.733.962-.576 1.7-1.49 2.048-2.578-.9.534-1.897.922-2.958 1.13-.85-.904-2.06-1.47-3.4-1.47-2.572 0-4.658 2.086-4.658 4.66 0 .364.042.718.12 1.06-3.873-.195-7.304-2.05-9.602-4.868-.4.69-.63 1.49-.63 2.342 0 1.616.823 3.043 2.072 3.878-.764-.025-1.482-.234-2.11-.583v.06c0 2.257 1.605 4.14 3.737 4.568-.392.106-.803.162-1.227.162-.3 0-.593-.028-.877-.082.593 1.85 2.313 3.198 4.352 3.234-1.595 1.25-3.604 1.995-5.786 1.995-.376 0-.747-.022-1.112-.065 2.062 1.323 4.51 2.093 7.14 2.093 8.57 0 13.255-7.098 13.255-13.254 0-.2-.005-.402-.014-.602.91-.658 1.7-1.477 2.323-2.41z'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 120px 120px;
+      pointer-events: none;
+    }
+    
+    /* 确保卡片背景有足够的不透明度覆盖水印 */
+    .profile-header,
+    .stats-card,
+    .analysis-card {
+      background: linear-gradient(135deg, var(--card-background) 0%, #E8F5E9 100%);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      position: relative;
+      z-index: 1;
+    }
+    
+    .container {
+      max-width: 800px;
+      width: 100%;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .profile-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, var(--card-background) 0%, #E8F5E9 100%);
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .avatar {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      margin-right: 20px;
+      object-fit: cover;
+      border: 3px solid var(--primary-light);
+    }
+    
+    .profile-info {
+      flex: 1;
+    }
+    
+    .twitter-name {
+      font-size: 24px;
+      font-weight: bold;
+      margin: 0 0 5px 0;
+      color: var(--primary-dark);
+    }
+    
+    .twitter-handle {
+      font-size: 16px;
+      color: var(--text-secondary);
+      margin: 0 0 10px 0;
+    }
+    
+    .twitter-link {
+      display: flex;
+      align-items: center;
+      color: var(--primary-color);
+      text-decoration: none;
+      font-size: 14px;
+    }
+    
+    .twitter-link svg {
+      margin-right: 5px;
+      fill: var(--primary-color);
+    }
+    
+    .twitter-rating {
+      min-width: 120px;
+      margin-left: 20px;
+      text-align: center;
+      border-left: 1px solid var(--secondary-light);
+      padding-left: 20px;
+    }
+    
+    .rating-box {
+      margin-bottom: 15px;
+    }
+    
+    .rating-label, .ranking-label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+    }
+    
+    .rating-value {
+      display: inline-block;
+      width: 40px;
+      height: 40px;
+      line-height: 40px;
+      text-align: center;
+      border-radius: 50%;
+      font-weight: bold;
+      font-size: 20px;
+      color: white;
+    }
+    
+    .rating-a {
+      background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+    }
+    
+    .ranking-value {
+      display: inline-block;
+      background-color: #E8F5E9;
+      color: var(--primary-dark);
+      padding: 5px 10px;
+      border-radius: 16px;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .stats-card {
+      background: linear-gradient(135deg, var(--card-background) 0%, #E8F5E9 100%);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .stats-title {
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin: 0 0 15px 0;
+      font-weight: 500;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 15px;
+    }
+    
+    .stat-item {
+      text-align: center;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: var(--primary-color);
+      margin: 0 0 5px 0;
+    }
+    
+    .stat-label {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+    
+    .tag {
+      display: inline-block;
+      background-color: #E8F5E9;
+      color: var(--primary-dark);
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      margin-right: 5px;
+      margin-bottom: 5px;
+    }
+    
+    .research-areas {
+      display: flex;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      margin-bottom: 20px;
+    }
+    
+    .analysis-card {
+      background: linear-gradient(135deg, var(--card-background) 0%, #E8F5E9 100%);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .analysis-section {
+      margin-bottom: 20px;
+    }
+    
+    .analysis-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--primary-dark);
+      margin: 0 0 10px 0;
+    }
+    
+    .analysis-content {
+      font-size: 14px;
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+    
+    .emoji-section {
+      display: flex;
+      justify-content: center;
+      margin: 15px 0;
+      font-size: 24px;
+      letter-spacing: 8px;
+    }
+    
+    .comparison-section {
+      display: flex;
+      align-items: center;
+      margin-top: 15px;
+      padding: 15px;
+      background-color: rgba(129, 199, 132, 0.1);
+      border-radius: 8px;
+    }
+    
+    .comparison-avatar {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      margin-right: 15px;
+      object-fit: cover;
+      border: 2px solid var(--primary-light);
+    }
+    
+    .comparison-info {
+      flex: 1;
+    }
+    
+    .comparison-name {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 5px 0;
+      color: var(--text-primary);
+    }
+    
+    .comparison-reason {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin: 0;
+    }
+    
+    .chart-section {
+      margin-top: 25px;
+    }
+    
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    
+    .chart-title {
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .millionaire-potential {
+      color: var(--primary-color);
+      font-weight: 500;
+    }
+    
+    .weakness-list {
+      padding-left: 20px;
+    }
+    
+    .weakness-item {
+      margin-bottom: 8px;
+      color: var(--text-primary);
+    }
+    
+    @media (max-width: 600px) {
+      .profile-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      
+      .twitter-rating {
+        margin-left: 0;
+        margin-top: 15px;
+        padding-left: 0;
+        border-left: none;
+        border-top: 1px solid var(--secondary-light);
+        padding-top: 15px;
+        width: 100%;
+        display: flex;
+        justify-content: space-around;
+      }
+      
+      .rating-box {
+        margin-bottom: 0;
+      }
+      
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Profile Header -->
+    <div class="profile-header">
+      <img src="twitter_images/samuel_ys92.jpg" alt="Samuel" class="avatar">
+      <div class="profile-info">
+        <h1 class="twitter-name">Samuel</h1>
+        <p class="twitter-handle">@samuel_ys92</p>
+        <a href="https://twitter.com/samuel_ys92" class="twitter-link">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+            <path d="M23.643 4.937c-.835.37-1.732.62-2.675.733.962-.576 1.7-1.49 2.048-2.578-.9.534-1.897.922-2.958 1.13-.85-.904-2.06-1.47-3.4-1.47-2.572 0-4.658 2.086-4.658 4.66 0 .364.042.718.12 1.06-3.873-.195-7.304-2.05-9.602-4.868-.4.69-.63 1.49-.63 2.342 0 1.616.823 3.043 2.072 3.878-.764-.025-1.482-.234-2.11-.583v.06c0 2.257 1.605 4.14 3.737 4.568-.392.106-.803.162-1.227.162-.3 0-.593-.028-.877-.082.593 1.85 2.313 3.198 4.352 3.234-1.595 1.25-3.604 1.995-5.786 1.995-.376 0-.747-.022-1.112-.065 2.062 1.323 4.51 2.093 7.14 2.093 8.57 0 13.255-7.098 13.255-13.254 0-.2-.005-.402-.014-.602.91-.658 1.7-1.477 2.323-2.41z"></path>
+          </svg>
+          View Twitter Profile
+        </a>
+      </div>
+      <div class="twitter-rating">
+        <div class="rating-box">
+          <span class="rating-label">Influence Rating</span>
+          <span class="rating-value rating-a">A</span>
+        </div>
+        <div class="field-ranking">
+          <span class="ranking-label">Tech Influencer Ranking</span>
+          <span class="ranking-value">Top 20%</span>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Twitter Stats -->
+    <div class="stats-card">
+      <h2 class="stats-title">PROFILE METRICS</h2>
+      <div class="research-areas">
+        <span class="tag">AI Enthusiast</span>
+        <span class="tag">Web3 Innovator</span>
+        <span class="tag">Crypto Developer</span>
+      </div>
+      
+      <div class="stats-grid">
+        <div class="stat-item">
+          <p class="stat-value">2,777</p>
+          <p class="stat-label">Followers</p>
+        </div>
+        <div class="stat-item">
+          <p class="stat-value">93%</p>
+          <p class="stat-label">Millionaire Potential</p>
+        </div>
+        <div class="stat-item">
+          <p class="stat-value">A+</p>
+          <p class="stat-label">Tech Expertise</p>
+        </div>
+      </div>
+    </div>
+    
+    <!-- AI Analysis -->
+    <div class="analysis-card">
+      <h2 class="stats-title">AI PERSONALITY ANALYSIS</h2>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">🤖 SUMMARY</h3>
+        <p class="analysis-content">A tech visionary relentlessly driving innovation at the bleeding edge of AI and decentralized systems, balancing immense potential with needs for focus and human connection.</p>
+      </div>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">💻 CAREER PATH</h3>
+        <p class="analysis-content">Found a disruptive startup at the AI-Web3 intersection. Focus on developing decentralized AI platforms while building industry networks and leadership skills to challenge tech norms.</p>
+      </div>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">💎 FINANCIAL OUTLOOK</h3>
+        <p class="analysis-content">93% millionaire potential through AI/Web3 innovations like ELIZA project. Maintain technical edge with strategic investments in cutting-edge blockchain-AI integrations.</p>
+      </div>
+      
+      <div class="comparison-section">
+        <img src="twitter_images/marc.webp" alt="Marc Andreessen" class="comparison-avatar">
+        <div class="comparison-info">
+          <p class="comparison-name">🚀 Similar to: Marc Andreessen</p>
+          <p class="comparison-reason">Similar pioneering spirit in emerging technologies; both are visionaries shaping new digital eras (AI/Web3 vs. internet)</p>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Strengths & Weaknesses -->
+    <div class="analysis-card">
+      <h2 class="stats-title">STRENGTHS & AREAS FOR IMPROVEMENT</h2>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">🧠 TOP STRENGTHS</h3>
+        <p class="analysis-content">
+          1. Visionary thinking in emerging technologies<br>
+          2. Strong technical expertise in AI and Web3<br>
+          3. Ability to connect disparate concepts into innovative solutions
+        </p>
+      </div>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">🌐 AREAS FOR IMPROVEMENT</h3>
+        <ul class="weakness-list">
+          <li class="weakness-item">Tendency to spread focus across too many projects simultaneously</li>
+          <li class="weakness-item">May prioritize technical innovation over user experience</li>
+          <li class="weakness-item">Could benefit from more balance between digital and physical world experiences</li>
+          <li class="weakness-item">Sometimes struggles to communicate complex ideas to non-technical audiences</li>
+          <li class="weakness-item">May need to develop stronger business acumen to complement technical skills</li>
+        </ul>
+      </div>
+    </div>
+    
+    <!-- Life Insights -->
+    <div class="analysis-card">
+      <h2 class="stats-title">LIFE INSIGHTS</h2>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">🔗 SPIRIT ANIMAL</h3>
+        <p class="analysis-content">You are a curious octopus. Known for their intelligence and adaptability, octopuses represent your ability to navigate and thrive in rapidly changing technological landscapes with multiple projects simultaneously.</p>
+      </div>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">🚀 BIGGEST GOAL</h3>
+        <p class="analysis-content">Creating a revolutionary product or platform at the intersection of AI and Web3 that fundamentally changes how people interact with technology, while maintaining ethical standards and human-centered design.</p>
+      </div>
+      
+      <div class="analysis-section">
+        <h3 class="analysis-title">💻 LIFE SUGGESTION</h3>
+        <p class="analysis-content">Consider implementing a weekly "digital detox day" where you completely disconnect from all technology and focus on nature and human interactions. This will help balance your digital immersion and provide fresh perspectives for your innovative work.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

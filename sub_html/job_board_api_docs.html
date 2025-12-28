@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Board API 接口文档</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css">
+    <style>
+        body {
+            padding-top: 20px;
+            padding-bottom: 40px;
+        }
+        .endpoint {
+            margin-bottom: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .method {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .method-get {
+            background-color: #61affe;
+            color: white;
+        }
+        .method-post {
+            background-color: #49cc90;
+            color: white;
+        }
+        .method-put {
+            background-color: #fca130;
+            color: white;
+        }
+        .method-delete {
+            background-color: #f93e3e;
+            color: white;
+        }
+        .url {
+            font-family: monospace;
+            font-size: 1.1em;
+        }
+        .param-name {
+            font-weight: bold;
+        }
+        .param-type {
+            color: #6c757d;
+            font-style: italic;
+        }
+        .param-required {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .param-optional {
+            color: #6c757d;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .table-params th {
+            background-color: #f8f9fa;
+        }
+        .nav-pills .nav-link.active {
+            background-color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="mb-5">
+            <h1 class="text-center">Job Board API 接口文档</h1>
+            <p class="text-center text-muted">本文档描述了 Job Board API 的接口规范，包括请求方法、URL、参数、请求体和响应格式。</p>
+        </header>
+
+        <div class="row">
+            <div class="col-md-3">
+                <nav id="navbar-api" class="sticky-top pt-3">
+                    <h5>目录</h5>
+                    <nav class="nav nav-pills flex-column">
+                        <a class="nav-link" href="#basic-info">基本信息</a>
+                        <a class="nav-link" href="#common-response">通用响应格式</a>
+                        <a class="nav-link" href="#authentication">认证</a>
+                        <a class="nav-link" href="#verified-user">验证用户</a>
+                        <a class="nav-link" href="#endpoints">API 端点</a>
+                        <nav class="nav nav-pills flex-column">
+                            <a class="nav-link ms-3" href="#get-posts">获取职位发布列表</a>
+                            <a class="nav-link ms-3" href="#get-post">获取单个职位发布</a>
+                            <a class="nav-link ms-3" href="#create-post">创建职位发布</a>
+                            <a class="nav-link ms-3" href="#update-post">更新职位发布</a>
+                            <a class="nav-link ms-3" href="#delete-post">删除职位发布</a>
+                            <a class="nav-link ms-3" href="#get-my-posts">获取当前用户的职位发布</a>
+                        </nav>
+                        <a class="nav-link" href="#error-codes">错误码</a>
+                        <a class="nav-link" href="#notes">注意事项</a>
+                        <a class="nav-link" href="#test-page">测试页面</a>
+                    </nav>
+                </nav>
+            </div>
+            <div class="col-md-9">
+                <section id="basic-info" class="mb-5">
+                    <h2>基本信息</h2>
+                    <ul>
+                        <li><strong>基础URL</strong>: <code>http://localhost:5001</code> (开发环境) 或 <code>https://your-production-domain.com</code> (生产环境)</li>
+                        <li><strong>认证方式</strong>: 通过请求头中的 <code>Userid</code> 或 <code>userid</code> 字段提供用户ID，或通过 <code>Authorization: Bearer {token}</code> 提供 Firebase 令牌</li>
+                        <li><strong>验证用户</strong>: 某些端点（如创建帖子）需要经过 Firebase 验证的真实用户</li>
+                        <li><strong>响应格式</strong>: 所有API响应均为JSON格式</li>
+                        <li><strong>日期格式</strong>: ISO 8601 格式 (例如: <code>2023-04-15T08:49:27</code>)</li>
+                        <li><strong>错误处理</strong>: 当发生错误时，API将返回相应的HTTP状态码和错误信息</li>
+                    </ul>
+                </section>
+
+                <section id="common-response" class="mb-5">
+                    <h2>通用响应格式</h2>
+                    <p>所有API响应都遵循以下格式:</p>
+                    <pre><code class="language-json">{
+  "success": true,
+  "data": { ... }  // 成功时返回的数据
+}</code></pre>
+                    <p>或者在发生错误时:</p>
+                    <pre><code class="language-json">{
+  "success": false,
+  "error": "错误信息"
+}</code></pre>
+                </section>
+
+                <section id="authentication" class="mb-5">
+                    <h2>认证</h2>
+                    <p>所有需要认证的接口都需要在请求头中包含用户ID或令牌:</p>
+
+                    <h3>方式1: 用户ID头</h3>
+                    <pre><code>Userid: your-user-id</code></pre>
+                    <p>或者:</p>
+                    <pre><code>userid: your-user-id</code></pre>
+
+                    <h3>方式2: Bearer 令牌</h3>
+                    <pre><code>Authorization: Bearer your-firebase-token</code></pre>
+                </section>
+
+                <section id="verified-user" class="mb-5">
+                    <h2>验证用户</h2>
+                    <p>某些端点（如创建帖子）需要经过 Firebase 验证的真实用户。这些端点使用更严格的验证方式，即使在开发环境中也不允许未经验证的用户访问。</p>
+
+                    <p>这些端点包括:</p>
+                    <ul>
+                        <li><code>POST /api/job-board/posts</code> (创建新的职位发布)</li>
+                    </ul>
+                </section>
+
+                <section id="endpoints" class="mb-5">
+                    <h2>API 端点</h2>
+
+                    <div id="get-posts" class="endpoint">
+                        <h3>1. 获取职位发布列表</h3>
+                        <p>获取职位发布列表，支持筛选和分页。</p>
+                        <div class="mb-3">
+                            <span class="method method-get">GET</span>
+                            <span class="url">/api/job-board/posts</span>
+                        </div>
+                        <p><strong>认证</strong>: 可选</p>
+                        <h4>查询参数</h4>
+                        <table class="table table-params">
+                            <thead>
+                                <tr>
+                                    <th>参数名</th>
+                                    <th>类型</th>
+                                    <th>描述</th>
+                                    <th>默认值</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>limit</td>
+                                    <td>整数</td>
+                                    <td>每页返回的最大记录数</td>
+                                    <td>20</td>
+                                </tr>
+                                <tr>
+                                    <td>offset</td>
+                                    <td>整数</td>
+                                    <td>跳过的记录数</td>
+                                    <td>0</td>
+                                </tr>
+                                <tr>
+                                    <td>post_type</td>
+                                    <td>字符串</td>
+                                    <td>按发布类型筛选 (可选值: job_offer, job_seeking, announcement, other)</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td>location</td>
+                                    <td>字符串</td>
+                                    <td>按地点筛选</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td>company</td>
+                                    <td>字符串</td>
+                                    <td>按公司筛选</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td>position</td>
+                                    <td>字符串</td>
+                                    <td>按职位筛选</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td>search</td>
+                                    <td>字符串</td>
+                                    <td>在标题和内容中搜索</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td>user_id</td>
+                                    <td>字符串</td>
+                                    <td>按用户ID筛选</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td>tags</td>
+                                    <td>字符串</td>
+                                    <td>按标签筛选 (逗号分隔)</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td>sort_by</td>
+                                    <td>字符串</td>
+                                    <td>排序字段</td>
+                                    <td>created_at</td>
+                                </tr>
+                                <tr>
+                                    <td>sort_order</td>
+                                    <td>字符串</td>
+                                    <td>排序顺序 (可选值: asc, desc)</td>
+                                    <td>desc</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <h4>请求示例</h4>
+                        <pre><code>GET /api/job-board/posts?limit=10&offset=0&post_type=job_offer&location=北京&search=工程师&sort_by=created_at&sort_order=desc</code></pre>
+                        <h4>响应示例</h4>
+                        <pre><code class="language-json">{
+  "success": true,
+  "data": {
+    "posts": [
+      {
+        "id": 1,
+        "user_id": "user123",
+        "title": "招聘高级前端工程师",
+        "content": "我们正在寻找有经验的前端工程师...",
+        "post_type": "job_offer",
+        "location": "北京",
+        "company": "ABC科技有限公司",
+        "position": "高级前端工程师",
+        "salary_range": "25k-35k",
+        "contact_info": "hr@example.com",
+        "tags": ["JavaScript", "React", "Vue"],
+        "is_active": true,
+        "view_count": 42,
+        "created_at": "2023-04-15T08:49:27",
+        "updated_at": "2023-04-15T08:49:27"
+      },
+      // 更多职位发布...
+    ],
+    "pagination": {
+      "total": 42,
+      "limit": 10,
+      "offset": 0,
+      "has_more": true
+    }
+  }
+}</code></pre>
+                    </div>
+
+                    <div id="get-post" class="endpoint">
+                        <h3>2. 获取单个职位发布</h3>
+                        <p>获取单个职位发布的详细信息。</p>
+                        <div class="mb-3">
+                            <span class="method method-get">GET</span>
+                            <span class="url">/api/job-board/posts/{post_id}</span>
+                        </div>
+                        <p><strong>认证</strong>: 可选</p>
+                        <h4>URL参数</h4>
+                        <table class="table table-params">
+                            <thead>
+                                <tr>
+                                    <th>参数名</th>
+                                    <th>类型</th>
+                                    <th>描述</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>post_id</td>
+                                    <td>整数</td>
+                                    <td>职位发布ID</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <h4>请求示例</h4>
+                        <pre><code>GET /api/job-board/posts/1</code></pre>
+                        <h4>响应示例</h4>
+                        <pre><code class="language-json">{
+  "success": true,
+  "data": {
+    "id": 1,
+    "user_id": "user123",
+    "title": "招聘高级前端工程师",
+    "content": "我们正在寻找有经验的前端工程师...",
+    "post_type": "job_offer",
+    "location": "北京",
+    "company": "ABC科技有限公司",
+    "position": "高级前端工程师",
+    "salary_range": "25k-35k",
+    "contact_info": "hr@example.com",
+    "tags": ["JavaScript", "React", "Vue"],
+    "is_active": true,
+    "view_count": 43,
+    "created_at": "2023-04-15T08:49:27",
+    "updated_at": "2023-04-15T08:49:27"
+  }
+}</code></pre>
+                    </div>
+
+                    <div id="create-post" class="endpoint">
+                        <h3>3. 创建职位发布</h3>
+                        <p>创建新的职位发布。</p>
+                        <div class="mb-3">
+                            <span class="method method-post">POST</span>
+                            <span class="url">/api/job-board/posts</span>
+                        </div>
+                        <p><strong>认证</strong>: 必需（需要经过验证的真实用户）</p>
+                        <h4>请求体</h4>
+                        <table class="table table-params">
+                            <thead>
+                                <tr>
+                                    <th>参数名</th>
+                                    <th>类型</th>
+                                    <th>描述</th>
+                                    <th>是否必需</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>title</td>
+                                    <td>字符串</td>
+                                    <td>标题</td>
+                                    <td class="param-required">是</td>
+                                </tr>
+                                <tr>
+                                    <td>content</td>
+                                    <td>字符串</td>
+                                    <td>内容</td>
+                                    <td class="param-required">是</td>
+                                </tr>
+                                <tr>
+                                    <td>post_type</td>
+                                    <td>字符串</td>
+                                    <td>发布类型 (可选值: job_offer, job_seeking, announcement, other)</td>
+                                    <td class="param-optional">否 (默认: job_offer)</td>
+                                </tr>
+                                <tr>
+                                    <td>location</td>
+                                    <td>字符串</td>
+                                    <td>地点</td>
+                                    <td class="param-optional">否</td>
+                                </tr>
+                                <tr>
+                                    <td>company</td>
+                                    <td>字符串</td>
+                                    <td>公司</td>
+                                    <td class="param-optional">否</td>
+                                </tr>
+                                <tr>
+                                    <td>position</td>
+                                    <td>字符串</td>
+                                    <td>职位</td>
+                                    <td class="param-optional">否</td>
+                                </tr>
+                                <tr>
+                                    <td>salary_range</td>
+                                    <td>字符串</td>
+                                    <td>薪资范围</td>
+                                    <td class="param-optional">否</td>
+                                </tr>
+                                <tr>
+                                    <td>contact_info</td>
+                                    <td>字符串</td>
+                                    <td>联系方式</td>
+                                    <td class="param-optional">否</td>
+                                </tr>
+                                <tr>
+                                    <td>tags</td>
+                                    <td>字符串数组</td>
+                                    <td>标签</td>
+                                    <td class="param-optional">否</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <h4>请求示例</h4>
+                        <pre><code class="language-json">POST /api/job-board/posts
+Content-Type: application/json
+Userid: user123
+
+{
+  "title": "招聘高级前端工程师",
+  "content": "我们正在寻找有经验的前端工程师...",
+  "post_type": "job_offer",
+  "location": "北京",
+  "company": "ABC科技有限公司",
+  "position": "高级前端工程师",
+  "salary_range": "25k-35k",
+  "contact_info": "hr@example.com",
+  "tags": ["JavaScript", "React", "Vue"]
+}</code></pre>
+                        <h4>响应示例</h4>
+                        <pre><code class="language-json">{
+  "success": true,
+  "data": {
+    "id": 1,
+    "user_id": "user123",
+    "title": "招聘高级前端工程师",
+    "content": "我们正在寻找有经验的前端工程师...",
+    "post_type": "job_offer",
+    "location": "北京",
+    "company": "ABC科技有限公司",
+    "position": "高级前端工程师",
+    "salary_range": "25k-35k",
+    "contact_info": "hr@example.com",
+    "tags": ["JavaScript", "React", "Vue"],
+    "is_active": true,
+    "view_count": 0,
+    "created_at": "2023-04-15T08:49:27",
+    "updated_at": "2023-04-15T08:49:27"
+  }
+}</code></pre>
+                    </div>
+
+                    <div id="update-post" class="endpoint">
+                        <h3>4. 更新职位发布</h3>
+                        <p>更新现有的职位发布。</p>
+                        <div class="mb-3">
+                            <span class="method method-put">PUT</span>
+                            <span class="url">/api/job-board/posts/{post_id}</span>
+                        </div>
+                        <p><strong>认证</strong>: 必需 (只有创建者可以更新)</p>
+                        <h4>URL参数</h4>
+                        <table class="table table-params">
+                            <thead>
+                                <tr>
+                                    <th>参数名</th>
+                                    <th>类型</th>
+                                    <th>描述</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>post_id</td>
+                                    <td>整数</td>
+                                    <td>职位发布ID</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <h4>请求体</h4>
+                        <p>与创建职位发布相同，但所有字段都是可选的</p>
+                        <h4>请求示例</h4>
+                        <pre><code class="language-json">PUT /api/job-board/posts/1
+Content-Type: application/json
+Userid: user123
+
+{
+  "title": "招聘资深前端工程师",
+  "salary_range": "30k-40k",
+  "tags": ["JavaScript", "React", "Vue", "TypeScript"]
+}</code></pre>
+                        <h4>响应示例</h4>
+                        <pre><code class="language-json">{
+  "success": true,
+  "data": {
+    "id": 1,
+    "user_id": "user123",
+    "title": "招聘资深前端工程师",
+    "content": "我们正在寻找有经验的前端工程师...",
+    "post_type": "job_offer",
+    "location": "北京",
+    "company": "ABC科技有限公司",
+    "position": "高级前端工程师",
+    "salary_range": "30k-40k",
+    "contact_info": "hr@example.com",
+    "tags": ["JavaScript", "React", "Vue", "TypeScript"],
+    "is_active": true,
+    "view_count": 43,
+    "created_at": "2023-04-15T08:49:27",
+    "updated_at": "2023-04-15T09:15:42"
+  }
+}</code></pre>
+                    </div>
+
+                    <div id="delete-post" class="endpoint">
+                        <h3>5. 删除职位发布</h3>
+                        <p>删除职位发布。</p>
+                        <div class="mb-3">
+                            <span class="method method-delete">DELETE</span>
+                            <span class="url">/api/job-board/posts/{post_id}</span>
+                        </div>
+                        <p><strong>认证</strong>: 必需 (只有创建者可以删除)</p>
+                        <h4>URL参数</h4>
+                        <table class="table table-params">
+                            <thead>
+                                <tr>
+                                    <th>参数名</th>
+                                    <th>类型</th>
+                                    <th>描述</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>post_id</td>
+                                    <td>整数</td>
+                                    <td>职位发布ID</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <h4>请求示例</h4>
+                        <pre><code>DELETE /api/job-board/posts/1
+Userid: user123</code></pre>
+                        <h4>响应示例</h4>
+                        <pre><code class="language-json">{
+  "success": true,
+  "message": "Post deleted successfully"
+}</code></pre>
+                    </div>
+
+                    <div id="get-my-posts" class="endpoint">
+                        <h3>6. 获取当前用户的职位发布</h3>
+                        <p>获取当前认证用户创建的职位发布列表。</p>
+                        <div class="mb-3">
+                            <span class="method method-get">GET</span>
+                            <span class="url">/api/job-board/my-posts</span>
+                        </div>
+                        <p><strong>认证</strong>: 必需</p>
+                        <h4>查询参数</h4>
+                        <p>与获取职位发布列表相同</p>
+                        <h4>请求示例</h4>
+                        <pre><code>GET /api/job-board/my-posts?limit=10&offset=0&sort_by=created_at&sort_order=desc
+Userid: user123</code></pre>
+                        <h4>响应示例</h4>
+                        <pre><code class="language-json">{
+  "success": true,
+  "data": {
+    "posts": [
+      {
+        "id": 1,
+        "user_id": "user123",
+        "title": "招聘资深前端工程师",
+        "content": "我们正在寻找有经验的前端工程师...",
+        "post_type": "job_offer",
+        "location": "北京",
+        "company": "ABC科技有限公司",
+        "position": "高级前端工程师",
+        "salary_range": "30k-40k",
+        "contact_info": "hr@example.com",
+        "tags": ["JavaScript", "React", "Vue", "TypeScript"],
+        "is_active": true,
+        "view_count": 43,
+        "created_at": "2023-04-15T08:49:27",
+        "updated_at": "2023-04-15T09:15:42"
+      },
+      // 更多职位发布...
+    ],
+    "pagination": {
+      "total": 5,
+      "limit": 10,
+      "offset": 0,
+      "has_more": false
+    }
+  }
+}</code></pre>
+                    </div>
+                </section>
+
+                <section id="error-codes" class="mb-5">
+                    <h2>错误码</h2>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>HTTP 状态码</th>
+                                <th>描述</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>400</td>
+                                <td>请求参数错误</td>
+                            </tr>
+                            <tr>
+                                <td>401</td>
+                                <td>未认证</td>
+                            </tr>
+                            <tr>
+                                <td>403</td>
+                                <td>无权限</td>
+                            </tr>
+                            <tr>
+                                <td>404</td>
+                                <td>资源不存在</td>
+                            </tr>
+                            <tr>
+                                <td>500</td>
+                                <td>服务器内部错误</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <h3>示例错误响应</h3>
+                    <pre><code class="language-json">{
+  "success": false,
+  "error": "Post not found"
+}</code></pre>
+                    <pre><code class="language-json">{
+  "success": false,
+  "error": "You are not authorized to update this post"
+}</code></pre>
+                    <pre><code class="language-json">{
+  "success": false,
+  "error": "Title is required"
+}</code></pre>
+                </section>
+
+                <section id="notes" class="mb-5">
+                    <h2>注意事项</h2>
+                    <ol>
+                        <li>所有需要认证的接口都必须在请求头中包含用户ID</li>
+                        <li>只有创建者可以更新或删除职位发布</li>
+                        <li>在生产环境中，所有API请求都应该通过HTTPS进行</li>
+                        <li>日期字段使用ISO 8601格式</li>
+                        <li>标签字段是字符串数组</li>
+                    </ol>
+                </section>
+
+                <section id="test-page" class="mb-5">
+                    <h2>测试页面</h2>
+                    <p>您可以通过访问以下URL来测试Job Board API:</p>
+                    <pre><code>http://localhost:5001/sub_html/job_board.html</code></pre>
+                    <p>这个页面提供了一个简单的用户界面，可以用来创建、查看、更新和删除职位发布。</p>
+                    <p><a href="/sub_html/job_board.html" class="btn btn-primary" target="_blank">打开测试页面</a></p>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化代码高亮
+            hljs.highlightAll();
+
+            // 激活滚动监听
+            const scrollSpy = new bootstrap.ScrollSpy(document.body, {
+                target: '#navbar-api',
+                offset: 100
+            });
+
+            // 平滑滚动
+            document.querySelectorAll('#navbar-api a').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const targetId = this.getAttribute('href');
+                    const targetElement = document.querySelector(targetId);
+                    window.scrollTo({
+                        top: targetElement.offsetTop - 20,
+                        behavior: 'smooth'
+                    });
+                });
+            });
+        });
+    </script>
+</body>
+</html>

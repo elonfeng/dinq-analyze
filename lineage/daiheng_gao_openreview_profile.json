@@ -1,0 +1,68 @@
+{
+    "name": "Daiheng Gao",
+    "current_institution": "Researcher, University of Science and Technology of China",
+    "career_history": [
+        {
+            "position": "Researcher",
+            "institution": "University of Science and Technology of China(ustc.edu.cn)",
+            "timeframe": "2024 – Present",
+            "location": ""
+        },
+        {
+            "position": "Researcher",
+            "institution": "Institute for Intelligent Computing, Alibaba Group(alibaba-inc.com)",
+            "timeframe": "2020 – 2024",
+            "location": ""
+        },
+        {
+            "position": "MS student",
+            "institution": "Beijing University of Technology(bjut.edu.cn)",
+            "timeframe": "2015 – 2018",
+            "location": ""
+        }
+    ],
+    "relations": [
+        {
+            "relation_type": "PhD Advisor",
+            "name": "Weiming Zhang",
+            "timeframe": "2024 – Present",
+            "profile_link": "/profile?id=~Weiming_Zhang2"
+        }
+    ],
+    "expertise": [
+        {
+            "area": "Diffusion Models",
+            "timeframe": "2024 – Present"
+        },
+        {
+            "area": "GAN",
+            "timeframe": "2020 – 2022"
+        }
+    ],
+    "coauthor_links": {
+        "Bang Zhang": "/profile?id=~Bang_Zhang1",
+        "Cewu Lu": "/profile?id=~Cewu_Lu3",
+        "Feng Wang": "/profile?id=~Feng_Wang18",
+        "Hao Zhu": "/profile?id=~Hao_Zhu5",
+        "Jinwei Qi": "/profile?id=~Jinwei_Qi2",
+        "Kai Lee": "/profile?id=~Kai_Lee1",
+        "Kailin Li": "/profile?id=~Kailin_Li1",
+        "Kangneng Zhou": "/profile?id=~Kangneng_Zhou1",
+        "Lian Zhuo": "/profile?id=~Lian_Zhuo1",
+        "Liefeng Bo": "/profile?id=~Liefeng_Bo1",
+        "Lixin Yang": "/profile?id=~Lixin_Yang1",
+        "Longhao Zhang": "/profile?id=~Longhao_Zhang2",
+        "Pan Pan": "/profile?id=~Pan_Pan1",
+        "Peng Zhang": "/profile?id=~Peng_Zhang32",
+        "Ping Tan": "/profile?id=~Ping_Tan2",
+        "Tat-Seng Chua": "/profile?id=~Tat-Seng_Chua2",
+        "Xinjie Li": "/profile?id=~Xinjie_Li1",
+        "Xinya Ji": "/profile?id=~Xinya_Ji1",
+        "Xuanmeng Zhang": "/profile?id=~Xuanmeng_Zhang1",
+        "Xun Cao": "/profile?id=~Xun_Cao1",
+        "Xusen Sun": "/profile?id=~Xusen_Sun1",
+        "Yi Yang": "/profile?id=~Yi_Yang4",
+        "Yuliang Xiu": "/profile?id=~Yuliang_Xiu2",
+        "Zhedong Zheng": "/profile?id=~Zhedong_Zheng1"
+    }
+}

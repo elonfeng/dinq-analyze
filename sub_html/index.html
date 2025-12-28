@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人主页</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 3rem;
+            flex-wrap: wrap;
+            gap: 2rem;
+        }
+
+        .profile-info h1 {
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
+            color: #333;
+        }
+
+        .institution {
+            font-size: 1.2rem;
+            color: #555;
+        }
+
+        .storage-info {
+            background-color: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .storage-bar {
+            height: 8px;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            margin: 10px 0;
+            position: relative;
+        }
+
+        .storage-used {
+            height: 100%;
+            width: 90%;
+            background: linear-gradient(to right, #ff4d4d, #ffaa00, #2ecc71);
+            border-radius: 4px;
+        }
+
+        .storage-text {
+            font-size: 0.9rem;
+            color: #777;
+            margin-bottom: 10px;
+        }
+
+        .storage-categories {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .category {
+            font-size: 0.8rem;
+            padding: 3px 8px;
+            border-radius: 10px;
+            color: white;
+        }
+
+        .photos {
+            background-color: #ff4d4d;
+        }
+
+        .apps {
+            background-color: #ff8c1a;
+        }
+
+        .photos2 {
+            background-color: #3498db;
+        }
+
+        .ios {
+            background-color: #9b59b6;
+        }
+
+        .threats {
+            background-color: #f1c40f;
+        }
+
+        .cards-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .card {
+            border-radius: 15px;
+            padding: 2rem;
+            color: white;
+            position: relative;
+            min-height: 250px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            overflow: hidden;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .twitter {
+            background-color: #4267b2;
+        }
+
+        .github {
+            background-color: #333;
+        }
+
+        .research {
+            background-color: #3498db;
+        }
+
+        .card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            position: relative;
+            z-index: 2;
+        }
+
+        .card ul {
+            list-style-type: none;
+            position: relative;
+            z-index: 2;
+        }
+
+        .card li {
+            margin-bottom: 0.8rem;
+            font-size: 1rem;
+        }
+
+        .card-icon {
+            position: absolute;
+            bottom: -20px;
+            right: -20px;
+            font-size: 8rem;
+            opacity: 0.2;
+            z-index: 1;
+        }
+
+        @media (max-width: 768px) {
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .storage-info {
+                max-width: 100%;
+            }
+
+            .cards-container {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="profile-info">
+                <h1>精力分配: AIGC算法, Python开发, 开源项目, AI Agent等</h1>
+                <div class="institution">
+                    <p>Institution:</p>
+                    <p>综合评分: A</p>
+                </div>
+            </div>
+            <div class="storage-info">
+                <div class="storage-bar">
+                    <div class="storage-used"></div>
+                </div>
+                <div class="storage-categories">
+                    <span class="category photos">Photos</span>
+                    <span class="category apps">Apps</span>
+                    <span class="category photos2">Photos</span>
+                    <span class="category ios">iOS</span>
+                    <span class="category threats">Threats</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="cards-container">
+            <div class="card twitter">
+                <div class="card-content">
+                    <h2>社交媒体</h2>
+                    <ul>
+                        <li>活跃的社交媒体用户</li>
+                        <li>粉丝超过2000+</li>
+                        <li>发展模板: Marc Andresson</li>
+                        <li>...</li>
+                    </ul>
+                </div>
+                <div class="card-icon">
+                    <i class="fab fa-twitter"></i>
+                </div>
+            </div>
+
+            <div class="card github">
+                <div class="card-content">
+                    <h2>开发技能</h2>
+                    <ul>
+                        <li>顶级项目PyTorch, Tensorflow贡献者</li>
+                        <li>擅长Python编程</li>
+                        <li>AI Agent专家</li>
+                        <li>...</li>
+                    </ul>
+                </div>
+                <div class="card-icon">
+                    <i class="fab fa-github"></i>
+                </div>
+            </div>
+
+            <div class="card research">
+                <div class="card-content">
+                    <h2>研究成果</h2>
+                    <ul>
+                        <li>7篇顶会论文(CVPR, NeurIPS...)</li>
+                        <li>谷歌学术657引用!</li>
+                        <li>计算机视觉专家</li>
+                        <li>...</li>
+                    </ul>
+                </div>
+                <div class="card-icon">
+                    <i class="fas fa-graduation-cap"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

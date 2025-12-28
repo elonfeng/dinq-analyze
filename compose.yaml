@@ -1,0 +1,42 @@
+name: dinq
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      - "127.0.0.1:${DINQ_REDIS_PORT:-6379}:6379"
+    volumes:
+      - dinq_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dinq
+      POSTGRES_PASSWORD: dinq
+      POSTGRES_DB: dinq
+    ports:
+      - "${DINQ_PG_PORT:-5432}:5432"
+    volumes:
+      - dinq_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dinq -d dinq"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 可选：本地邮件收件箱（用于离线验证/调试，不依赖外部 Resend）
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "${DINQ_MAILHOG_SMTP_PORT:-1025}:1025" # SMTP
+      - "${DINQ_MAILHOG_WEB_PORT:-8025}:8025" # Web UI
+
+volumes:
+  dinq_pgdata:
+  dinq_redisdata:

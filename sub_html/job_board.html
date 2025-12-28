@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>招聘信息板 - DINQ</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 20px;
+            padding-bottom: 40px;
+        }
+        .job-post {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .job-post:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .tag {
+            display: inline-block;
+            background-color: #f0f0f0;
+            padding: 2px 8px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            border-radius: 3px;
+            font-size: 0.8rem;
+        }
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100px;
+        }
+        .post-form {
+            margin-bottom: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .filters {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="mb-4">
+            <h1 class="text-center">招聘信息板</h1>
+            <p class="text-center text-muted">发布和查找招聘信息</p>
+        </header>
+
+        <!-- 登录状态 -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-body">
+                        <div id="login-status">
+                            <p class="text-center">正在检查登录状态...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 发布表单 -->
+        <div class="row mb-4" id="post-form-container" style="display: none;">
+            <div class="col-md-12">
+                <div class="card post-form">
+                    <div class="card-header">
+                        <h5>发布新信息</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="job-post-form">
+                            <div class="mb-3">
+                                <label for="title" class="form-label">标题</label>
+                                <input type="text" class="form-control" id="title" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="content" class="form-label">内容</label>
+                                <textarea class="form-control" id="content" rows="4" required></textarea>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="post-type" class="form-label">类型</label>
+                                        <select class="form-select" id="post-type">
+                                            <option value="job_offer">招聘信息</option>
+                                            <option value="job_seeking">求职信息</option>
+                                            <option value="announcement">公告</option>
+                                            <option value="other">其他</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="location" class="form-label">地点</label>
+                                        <input type="text" class="form-control" id="location">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="company" class="form-label">公司</label>
+                                        <input type="text" class="form-control" id="company">
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="position" class="form-label">职位</label>
+                                        <input type="text" class="form-control" id="position">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="salary-range" class="form-label">薪资范围</label>
+                                        <input type="text" class="form-control" id="salary-range">
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="contact-info" class="form-label">联系方式</label>
+                                        <input type="text" class="form-control" id="contact-info">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="tags" class="form-label">标签（用逗号分隔）</label>
+                                <input type="text" class="form-control" id="tags" placeholder="例如：Python, Flask, 远程">
+                            </div>
+                            <button type="submit" class="btn btn-primary">发布</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 筛选器 -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="filters">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="filter-type" class="form-label">类型</label>
+                                <select class="form-select" id="filter-type">
+                                    <option value="">全部</option>
+                                    <option value="job_offer">招聘信息</option>
+                                    <option value="job_seeking">求职信息</option>
+                                    <option value="announcement">公告</option>
+                                    <option value="other">其他</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="filter-location" class="form-label">地点</label>
+                                <input type="text" class="form-control" id="filter-location">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="filter-search" class="form-label">搜索</label>
+                                <input type="text" class="form-control" id="filter-search">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="filter-sort" class="form-label">排序</label>
+                                <select class="form-select" id="filter-sort">
+                                    <option value="created_at-desc">最新发布</option>
+                                    <option value="created_at-asc">最早发布</option>
+                                    <option value="view_count-desc">最多浏览</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-12">
+                            <button id="apply-filters" class="btn btn-primary">应用筛选</button>
+                            <button id="reset-filters" class="btn btn-secondary ms-2">重置</button>
+                            <button id="my-posts" class="btn btn-info ms-2" style="display: none;">我的发布</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 信息列表 -->
+        <div class="row">
+            <div class="col-md-12">
+                <div id="job-posts-container">
+                    <div class="loading">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="pagination" class="mt-4 text-center">
+                    <!-- 分页控件将在这里生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 查看详情模态框 -->
+    <div class="modal fade" id="post-detail-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="post-detail-title"></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="post-detail-body">
+                    <!-- 详情内容将在这里生成 -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-danger" id="delete-post" style="display: none;">删除</button>
+                    <button type="button" class="btn btn-primary" id="edit-post" style="display: none;">编辑</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 全局变量
+        let currentUserId = null;
+        let currentPage = 1;
+        let pageSize = 10;
+        let totalPosts = 0;
+        let currentPostId = null;
+        let viewingMyPosts = false;
+
+        // DOM 加载完成后执行
+        document.addEventListener('DOMContentLoaded', function() {
+            // 检查登录状态
+            checkLoginStatus();
+
+            // 加载职位发布列表
+            loadJobPosts();
+
+            // 绑定事件
+            document.getElementById('job-post-form').addEventListener('submit', handlePostSubmit);
+            document.getElementById('apply-filters').addEventListener('click', applyFilters);
+            document.getElementById('reset-filters').addEventListener('click', resetFilters);
+            document.getElementById('my-posts').addEventListener('click', toggleMyPosts);
+            document.getElementById('delete-post').addEventListener('click', handleDeletePost);
+            document.getElementById('edit-post').addEventListener('click', handleEditPost);
+        });
+
+        // 检查登录状态
+        function checkLoginStatus() {
+            const loginStatusElement = document.getElementById('login-status');
+
+            // 模拟获取用户ID（在实际应用中，这应该从您的认证系统获取）
+            // 这里我们从URL参数中获取用户ID，仅用于演示
+            const urlParams = new URLSearchParams(window.location.search);
+            currentUserId = urlParams.get('userid');
+
+            if (currentUserId) {
+                loginStatusElement.innerHTML = `
+                    <p class="text-center text-success">已登录，用户ID: ${currentUserId}</p>
+                    <p class="text-center"><button id="logout-btn" class="btn btn-sm btn-outline-danger">退出登录</button></p>
+                `;
+                document.getElementById('post-form-container').style.display = 'block';
+                document.getElementById('my-posts').style.display = 'inline-block';
+
+                // 绑定退出登录按钮
+                document.getElementById('logout-btn').addEventListener('click', function() {
+                    currentUserId = null;
+                    window.location.href = window.location.pathname;
+                });
+            } else {
+                loginStatusElement.innerHTML = `
+                    <p class="text-center text-warning">未登录，部分功能受限</p>
+                    <p class="text-center">
+                        <a href="?userid=test_user_123" class="btn btn-sm btn-primary">模拟登录 (test_user_123)</a>
+                        <a href="?userid=ffQNKT7sMMQ0MBxpFOQFMcAk3k72" class="btn btn-sm btn-primary">模拟登录 (ffQNKT7sMMQ0MBxpFOQFMcAk3k72)</a>
+                    </p>
+                `;
+                document.getElementById('post-form-container').style.display = 'none';
+                document.getElementById('my-posts').style.display = 'none';
+            }
+        }
+
+        // 加载职位发布列表
+        function loadJobPosts(page = 1) {
+            const postsContainer = document.getElementById('job-posts-container');
+            postsContainer.innerHTML = `
+                <div class="loading">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+            `;
+
+            // 构建API URL
+            let apiUrl = viewingMyPosts ? '/api/job-board/my-posts' : '/api/job-board/posts';
+            apiUrl += `?limit=${pageSize}&offset=${(page - 1) * pageSize}`;
+
+            // 添加筛选条件
+            const filterType = document.getElementById('filter-type').value;
+            const filterLocation = document.getElementById('filter-location').value;
+            const filterSearch = document.getElementById('filter-search').value;
+            const filterSort = document.getElementById('filter-sort').value;
+
+            if (filterType) apiUrl += `&post_type=${filterType}`;
+            if (filterLocation) apiUrl += `&location=${encodeURIComponent(filterLocation)}`;
+            if (filterSearch) apiUrl += `&search=${encodeURIComponent(filterSearch)}`;
+
+            if (filterSort) {
+                const [sortBy, sortOrder] = filterSort.split('-');
+                apiUrl += `&sort_by=${sortBy}&sort_order=${sortOrder}`;
+            }
+
+            // 添加用户ID到请求头（如果已登录）
+            const headers = {};
+            if (currentUserId) {
+                headers['Userid'] = currentUserId;
+            }
+
+            // 发送API请求
+            fetch(apiUrl, { headers })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        displayJobPosts(data.data.posts);
+                        updatePagination(data.data.pagination);
+                        totalPosts = data.data.pagination.total;
+                        currentPage = page;
+                    } else {
+                        postsContainer.innerHTML = `<p class="text-danger">加载失败: ${data.error}</p>`;
+                    }
+                })
+                .catch(error => {
+                    postsContainer.innerHTML = `<p class="text-danger">加载失败: ${error.message}</p>`;
+                });
+        }
+
+        // 显示职位发布列表
+        function displayJobPosts(posts) {
+            const postsContainer = document.getElementById('job-posts-container');
+
+            if (posts.length === 0) {
+                postsContainer.innerHTML = '<p class="text-center">没有找到符合条件的信息</p>';
+                return;
+            }
+
+            let html = '';
+
+            posts.forEach(post => {
+                // 处理日期格式，兼容字符串和日期对象
+                const postDate = post.created_at ? new Date(post.created_at).toLocaleString() : 'Unknown';
+                const postTypeLabel = getPostTypeLabel(post.post_type);
+
+                let tagsHtml = '';
+                if (post.tags && post.tags.length > 0) {
+                    tagsHtml = post.tags.map(tag => `<span class="tag">${tag}</span>`).join('');
+                }
+
+                html += `
+                    <div class="job-post card" data-id="${post.id}">
+                        <div class="card-body">
+                            <h5 class="card-title">${post.title}</h5>
+                            <h6 class="card-subtitle mb-2 text-muted">
+                                ${postTypeLabel} | ${post.location || '地点未指定'} |
+                                ${post.company ? post.company + ' | ' : ''}
+                                ${post.position ? post.position + ' | ' : ''}
+                                浏览: ${post.view_count}
+                            </h6>
+                            <p class="card-text">${truncateText(post.content, 150)}</p>
+                            <div class="mb-2">
+                                ${tagsHtml}
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="text-muted">发布于: ${postDate}</small>
+                                <button class="btn btn-sm btn-primary view-details" data-id="${post.id}">查看详情</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            postsContainer.innerHTML = html;
+
+            // 绑定查看详情按钮
+            document.querySelectorAll('.view-details').forEach(button => {
+                button.addEventListener('click', function() {
+                    const postId = this.getAttribute('data-id');
+                    viewPostDetails(postId);
+                });
+            });
+        }
+
+        // 更新分页控件
+        function updatePagination(pagination) {
+            const paginationElement = document.getElementById('pagination');
+            const totalPages = Math.ceil(pagination.total / pagination.limit);
+
+            if (totalPages <= 1) {
+                paginationElement.innerHTML = '';
+                return;
+            }
+
+            let html = '<nav><ul class="pagination justify-content-center">';
+
+            // 上一页按钮
+            html += `
+                <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                    <a class="page-link" href="#" data-page="${currentPage - 1}">上一页</a>
+                </li>
+            `;
+
+            // 页码按钮
+            for (let i = 1; i <= totalPages; i++) {
+                html += `
+                    <li class="page-item ${i === currentPage ? 'active' : ''}">
+                        <a class="page-link" href="#" data-page="${i}">${i}</a>
+                    </li>
+                `;
+            }
+
+            // 下一页按钮
+            html += `
+                <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                    <a class="page-link" href="#" data-page="${currentPage + 1}">下一页</a>
+                </li>
+            `;
+
+            html += '</ul></nav>';
+            paginationElement.innerHTML = html;
+
+            // 绑定分页按钮
+            document.querySelectorAll('.pagination .page-link').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const page = parseInt(this.getAttribute('data-page'));
+                    if (page >= 1 && page <= totalPages) {
+                        loadJobPosts(page);
+                    }
+                });
+            });
+        }
+
+        // 查看职位发布详情
+        function viewPostDetails(postId) {
+            currentPostId = postId;
+
+            // 添加用户ID到请求头（如果已登录）
+            const headers = {};
+            if (currentUserId) {
+                headers['Userid'] = currentUserId;
+            }
+
+            // 发送API请求
+            fetch(`/api/job-board/posts/${postId}`, { headers })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        displayPostDetails(data.data);
+                    } else {
+                        alert(`加载失败: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    alert(`加载失败: ${error.message}`);
+                });
+        }
+
+        // 显示职位发布详情
+        function displayPostDetails(post) {
+            const modal = new bootstrap.Modal(document.getElementById('post-detail-modal'));
+            const modalTitle = document.getElementById('post-detail-title');
+            const modalBody = document.getElementById('post-detail-body');
+            const deleteButton = document.getElementById('delete-post');
+            const editButton = document.getElementById('edit-post');
+
+            // 处理日期格式，兼容字符串和日期对象
+            const postDate = post.created_at ? new Date(post.created_at).toLocaleString() : 'Unknown';
+            const postTypeLabel = getPostTypeLabel(post.post_type);
+
+            let tagsHtml = '';
+            if (post.tags && post.tags.length > 0) {
+                tagsHtml = post.tags.map(tag => `<span class="tag">${tag}</span>`).join('');
+            }
+
+            modalTitle.textContent = post.title;
+
+            modalBody.innerHTML = `
+                <div class="mb-3">
+                    <h6 class="text-muted">
+                        ${postTypeLabel} | ${post.location || '地点未指定'} |
+                        ${post.company ? post.company + ' | ' : ''}
+                        ${post.position ? post.position + ' | ' : ''}
+                        浏览: ${post.view_count}
+                    </h6>
+                </div>
+                <div class="mb-3">
+                    <p style="white-space: pre-wrap;">${post.content}</p>
+                </div>
+                <div class="mb-3">
+                    ${tagsHtml}
+                </div>
+                <div class="mb-3">
+                    <p><strong>薪资范围:</strong> ${post.salary_range || '未指定'}</p>
+                    <p><strong>联系方式:</strong> ${post.contact_info || '未指定'}</p>
+                </div>
+                <div class="mb-3">
+                    <small class="text-muted">发布于: ${postDate}</small><br>
+                    <small class="text-muted">发布者: ${post.user_id}</small>
+                </div>
+            `;
+
+            // 显示/隐藏删除和编辑按钮
+            if (currentUserId && post.user_id === currentUserId) {
+                deleteButton.style.display = 'inline-block';
+                editButton.style.display = 'inline-block';
+            } else {
+                deleteButton.style.display = 'none';
+                editButton.style.display = 'none';
+            }
+
+            modal.show();
+        }
+
+        // 处理发布表单提交
+        function handlePostSubmit(e) {
+            e.preventDefault();
+
+            if (!currentUserId) {
+                alert('请先登录');
+                return;
+            }
+
+            const title = document.getElementById('title').value;
+            const content = document.getElementById('content').value;
+            const postType = document.getElementById('post-type').value;
+            const location = document.getElementById('location').value;
+            const company = document.getElementById('company').value;
+            const position = document.getElementById('position').value;
+            const salaryRange = document.getElementById('salary-range').value;
+            const contactInfo = document.getElementById('contact-info').value;
+            const tagsInput = document.getElementById('tags').value;
+
+            // 解析标签
+            const tags = tagsInput ? tagsInput.split(',').map(tag => tag.trim()) : [];
+
+            const postData = {
+                title,
+                content,
+                post_type: postType,
+                location,
+                company,
+                position,
+                salary_range: salaryRange,
+                contact_info: contactInfo,
+                tags
+            };
+
+            // 添加用户ID到请求头
+            const headers = {
+                'Content-Type': 'application/json',
+                'Userid': currentUserId
+            };
+
+            // 发送API请求
+            fetch('/api/job-board/posts', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(postData)
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('发布成功');
+                        document.getElementById('job-post-form').reset();
+                        loadJobPosts();
+                    } else {
+                        alert(`发布失败: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    alert(`发布失败: ${error.message}`);
+                });
+        }
+
+        // 应用筛选
+        function applyFilters() {
+            loadJobPosts(1);
+        }
+
+        // 重置筛选
+        function resetFilters() {
+            document.getElementById('filter-type').value = '';
+            document.getElementById('filter-location').value = '';
+            document.getElementById('filter-search').value = '';
+            document.getElementById('filter-sort').value = 'created_at-desc';
+            loadJobPosts(1);
+        }
+
+        // 切换查看我的发布
+        function toggleMyPosts() {
+            if (!currentUserId) {
+                alert('请先登录');
+                return;
+            }
+
+            viewingMyPosts = !viewingMyPosts;
+            document.getElementById('my-posts').textContent = viewingMyPosts ? '所有发布' : '我的发布';
+            loadJobPosts(1);
+        }
+
+        // 处理删除职位发布
+        function handleDeletePost() {
+            if (!currentUserId || !currentPostId) {
+                return;
+            }
+
+            if (!confirm('确定要删除这条发布吗？')) {
+                return;
+            }
+
+            // 添加用户ID到请求头
+            const headers = {
+                'Userid': currentUserId
+            };
+
+            // 发送API请求
+            fetch(`/api/job-board/posts/${currentPostId}`, {
+                method: 'DELETE',
+                headers
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('删除成功');
+                        bootstrap.Modal.getInstance(document.getElementById('post-detail-modal')).hide();
+                        loadJobPosts(currentPage);
+                    } else {
+                        alert(`删除失败: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    alert(`删除失败: ${error.message}`);
+                });
+        }
+
+        // 处理编辑职位发布（简化版，仅显示提示）
+        function handleEditPost() {
+            alert('编辑功能尚未实现，请在控制台查看当前帖子ID: ' + currentPostId);
+            console.log('编辑帖子ID:', currentPostId);
+        }
+
+        // 辅助函数：截断文本
+        function truncateText(text, maxLength) {
+            if (text.length <= maxLength) {
+                return text;
+            }
+            return text.substring(0, maxLength) + '...';
+        }
+
+        // 辅助函数：获取职位类型标签
+        function getPostTypeLabel(postType) {
+            const typeMap = {
+                'job_offer': '招聘信息',
+                'job_seeking': '求职信息',
+                'announcement': '公告',
+                'other': '其他'
+            };
+            return typeMap[postType] || postType;
+        }
+    </script>
+</body>
+</html>

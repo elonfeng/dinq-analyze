@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub Profile Stats</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      background-color: #0d1117;
+      color: #c9d1d9;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+    }
+    
+    .container {
+      max-width: 800px;
+      width: 100%;
+    }
+    
+    .profile-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, #1a1a1a 0%, #2d333b 100%);
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .avatar {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      margin-right: 20px;
+      object-fit: cover;
+      border: 3px solid #30363d;
+    }
+    
+    .profile-info {
+      flex: 1;
+    }
+    
+    .username {
+      font-size: 24px;
+      font-weight: bold;
+      margin: 0 0 5px 0;
+      color: white;
+    }
+    
+    .github-handle {
+      font-size: 16px;
+      color: #8b949e;
+      margin: 0 0 10px 0;
+    }
+    
+    .github-link {
+      display: flex;
+      align-items: center;
+      color: #58a6ff;
+      text-decoration: none;
+      font-size: 14px;
+    }
+    
+    .github-link svg {
+      margin-right: 5px;
+      fill: #58a6ff;
+    }
+    
+    .github-rating {
+      min-width: 120px;
+      margin-left: 20px;
+      text-align: center;
+      border-left: 1px solid #30363d;
+      padding-left: 20px;
+    }
+    
+    .rating-box {
+      margin-bottom: 15px;
+    }
+    
+    .rating-label, .ranking-label {
+      display: block;
+      font-size: 12px;
+      color: #8b949e;
+      margin-bottom: 5px;
+    }
+    
+    .rating-value {
+      display: inline-block;
+      width: 40px;
+      height: 40px;
+      line-height: 40px;
+      text-align: center;
+      border-radius: 50%;
+      font-weight: bold;
+      font-size: 20px;
+      color: white;
+    }
+    
+    .rating-a {
+      background: linear-gradient(135deg, #3a6ebd 0%, #1a4b8c 100%);
+    }
+    
+    .ranking-value {
+      display: inline-block;
+      background-color: #21262d;
+      color: #c9d1d9;
+      padding: 5px 10px;
+      border-radius: 16px;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .user-stats {
+      color: #c9d1d9;
+      font-size: 14px;
+      margin: 10px 0 20px 0;
+      line-height: 1.5;
+      background-color: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 15px;
+    }
+    
+    .repo-icon {
+      margin-left: 10px;
+      background-color: #30363d;
+      padding: 3px 6px;
+      border-radius: 5px;
+    }
+    
+    .stats-card {
+      background-color: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .stats-card-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    
+    .stats-title {
+      color: #8b949e;
+      font-size: 12px;
+      margin: 0;
+    }
+    
+    .stats-value {
+      color: white;
+      font-size: 24px;
+      font-weight: bold;
+      margin: 0;
+    }
+    
+    .focus-areas {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+    }
+    
+    .focus-tag {
+      background-color: #21262d;
+      color: #c9d1d9;
+      font-size: 12px;
+      padding: 5px 12px;
+      border-radius: 20px;
+    }
+    
+    .stats-grid {
+      display: flex;
+      gap: 16px;
+    }
+    
+    .stats-column {
+      flex: 1;
+    }
+    
+    .stats-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    
+    .stats-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .stats-number {
+      color: white;
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    
+    .stats-label {
+      color: #8b949e;
+      font-size: 12px;
+    }
+    
+    .green-text {
+      color: #3fb950;
+    }
+    
+    .red-text {
+      color: #f85149;
+    }
+    
+    .blue-text {
+      color: #58a6ff;
+    }
+    
+    .project-card {
+      background-color: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .project-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    
+    .project-name {
+      color: #58a6ff;
+      font-size: 16px;
+      font-weight: bold;
+      text-decoration: none;
+    }
+    
+    .project-stats {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    
+    .project-stat {
+      display: flex;
+      align-items: center;
+      color: #8b949e;
+      font-size: 12px;
+    }
+    
+    .project-stat svg {
+      margin-right: 4px;
+    }
+    
+    .language-dots {
+      display: flex;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    
+    .language-dot {
+      display: flex;
+      align-items: center;
+      font-size: 12px;
+      color: #8b949e;
+    }
+    
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    
+    .contribution-history {
+      margin-top: 16px;
+    }
+    
+    .contribution-title {
+      font-size: 14px;
+      font-weight: bold;
+      color: white;
+      margin-bottom: 8px;
+    }
+    
+    .contribution-item {
+      padding: 12px;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    
+    .contribution-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    
+    .contribution-type {
+      font-size: 12px;
+      color: #8b949e;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background-color: #21262d;
+    }
+    
+    .contribution-date {
+      font-size: 12px;
+      color: #8b949e;
+    }
+    
+    .contribution-title-link {
+      color: #58a6ff;
+      font-size: 14px;
+      text-decoration: none;
+      margin-bottom: 8px;
+      display: block;
+    }
+    
+    .rank-info {
+      background-color: #21262d;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: white;
+      display: inline-block;
+      margin-left: 8px;
+    }
+    
+    .tooltip {
+      position: relative;
+      display: inline-block;
+    }
+    
+    .tooltip .tooltiptext {
+      visibility: hidden;
+      width: 200px;
+      background-color: #30363d;
+      color: #c9d1d9;
+      text-align: center;
+      border-radius: 6px;
+      padding: 8px;
+      position: absolute;
+      z-index: 1;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -100px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      font-size: 12px;
+    }
+    
+    .tooltip:hover .tooltiptext {
+      visibility: visible;
+      opacity: 1;
+    }
+    
+    .tab-container {
+      margin-top: 20px;
+    }
+    
+    .tab-buttons {
+      display: flex;
+      border-bottom: 1px solid #30363d;
+      margin-bottom: 16px;
+    }
+    
+    .tab-button {
+      padding: 8px 16px;
+      background: none;
+      border: none;
+      color: #8b949e;
+      cursor: pointer;
+      font-size: 14px;
+      border-bottom: 2px solid transparent;
+    }
+    
+    .tab-button.active {
+      color: white;
+      font-weight: bold;
+      border-bottom: 2px solid #f78166;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .star-icon, .fork-icon, .eye-icon, .people-icon {
+      width: 16px;
+      height: 16px;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="profile-header">
+      <img src="https://github.com/tomguluson92.png" alt="Profile avatar" class="avatar">
+      <div class="profile-info">
+        <h1 class="username">tomgulusen92</h1>
+        <p class="github-handle">@tomguluson92</p>
+        <a href="https://github.com/tomguluson92" class="github-link">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="#58a6ff">
+            <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+          </svg>
+          View GitHub Profile
+        </a>
+      </div>
+      <div class="github-rating">
+        <div class="rating-box">
+          <span class="rating-label">Developer Level</span>
+          <span class="rating-value rating-a">67</span>
+        </div>
+        <div class="field-ranking">
+          <span class="ranking-label">Open Source Ranking</span>
+          <span class="ranking-value">Top 15%</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="user-stats">
+      <strong>Developer Summary:</strong> AI/ML specialist with significant contributions to major frameworks like TensorFlow and PyTorch; focuses on AIGC, Agent systems, and 3D technologies with exceptional documentation and optimization skills.
+    </div>
+    
+    <div class="stats-card">
+      <div class="stats-card-header">
+        <div>
+          <p class="stats-title">Total Level (100 is maximum)</p>
+          <p class="stats-value">67</p>
+        </div>
+        <div style="text-align: right;">
+          <p class="stats-title">Famous Projects Contributed</p>
+          <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+            <img src="https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.svg" alt="Diffusers" title="Diffusers" style="width: 24px; height: 24px; border-radius: 4px;">
+            <img src="https://pytorch.org/assets/images/pytorch-logo.png" alt="PyTorch" title="PyTorch" style="width: 24px; height: 24px; border-radius: 4px;">
+            <img src="https://www.tensorflow.org/images/tf_logo_social.png" alt="TensorFlow" title="TensorFlow" style="width: 24px; height: 24px; border-radius: 4px;">
+            <img src="https://framerusercontent.com/images/c6MnaTdWPKCodCthYTgde17s4U.png" alt="ElizaOS" title="ElizaOS" style="width: 24px; height: 24px; border-radius: 4px;">
+          </div>
+        </div>
+      </div>
+      
+      <div>
+        <p class="stats-title">Focus Areas</p>
+        <div class="focus-areas">
+          <span class="focus-tag">AIGC</span>
+          <span class="focus-tag">Agent</span>
+          <span class="focus-tag">3D</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="stats-grid">
+      <div class="stats-column stats-card">
+        <p class="stats-title">Pull Requests <span class="rank-info" title="Rank among all contributors">Rank: #8</span></p>
+        <div class="stats-row">
+          <div class="stats-container tooltip">
+            <span class="stats-number">17</span>
+            <span class="stats-label">Total</span>
+            <span class="tooltiptext">Opened 17 pull requests across 4 repositories</span>
+          </div>
+          <div class="stats-container tooltip">
+            <span class="stats-number">11</span>
+            <span class="stats-label">Merged</span>
+            <span class="tooltiptext">64.7% merge rate, avg review time: 3.2 days</span>
+          </div>
+          <div class="stats-container tooltip">
+            <span class="stats-number">13</span>
+            <span class="stats-label">Closed</span>
+            <span class="tooltiptext">Includes merged (11) and declined (2) PRs</span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="stats-column stats-card">
+        <p class="stats-title">Code Contributions <span class="rank-info" title="Rank among all contributors">Rank: #12</span></p>
+        <div class="stats-row">
+          <div class="stats-container tooltip">
+            <span class="stats-number">277</span>
+            <span class="stats-label">Files</span>
+            <span class="tooltiptext">Modified files across 11 components</span>
+          </div>
+          <div class="stats-container tooltip">
+            <span class="stats-number green-text">+5.4K</span>
+            <span class="stats-label">Additions</span>
+            <span class="tooltiptext">~42K tokens added</span>
+          </div>
+          <div class="stats-container tooltip">
+            <span class="stats-number red-text">-2.1K</span>
+            <span class="stats-label">Deletions</span>
+            <span class="tooltiptext">~16K tokens removed</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Top Projects Section -->
+    <div class="project-card">
+      <p class="stats-title">Key Project Contributions</p>
+      
+      <div style="margin-top: 16px;">
+        <!-- Projects grid layout - 2 per row -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <!-- TensorFlow Project -->
+          <div class="project-box" style="border: 1px solid #30363d; border-radius: 6px; padding: 16px;">
+            <div class="project-header">
+              <a href="#" class="project-name">tensorflow/tensorflow</a>
+              <div class="project-actions">
+                <span class="focus-tag">Machine Learning</span>
+              </div>
+            </div>
+            
+            <div class="project-stats">
+              <div class="project-stat">
+                <svg class="star-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 0L9.79611 5.52786H15.6085L10.9062 8.94427L12.7023 14.4721L8 11.0557L3.29772 14.4721L5.09383 8.94427L0.391548 5.52786H6.20389L8 0Z"/>
+                </svg>
+                167.3K stars
+              </div>
+              <div class="project-stat">
+                <svg class="fork-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/>
+                </svg>
+                87.2K forks
+              </div>
+              <div class="project-stat">
+                <svg class="people-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M2 5.5a3.5 3.5 0 1 1 5.898 2.549 5.508 5.508 0 0 1 3.034 4.084.75.75 0 1 1-1.482.235 4 4 0 0 0-7.9 0 .75.75 0 0 1-1.482-.236A5.507 5.507 0 0 1 3.102 8.05 3.493 3.493 0 0 1 2 5.5ZM11 4a3.001 3.001 0 0 1 2.22 5.018 5.01 5.01 0 0 1 2.56 3.012.749.749 0 0 1-.885.954.752.752 0 0 1-.549-.514 3.507 3.507 0 0 0-2.522-2.372.75.75 0 0 1-.574-.73v-.352a.75.75 0 0 1 .416-.672A1.5 1.5 0 0 0 11 5.5.75.75 0 0 1 11 4Zm-5.5-.5a2 2 0 1 0-.001 3.999A2 2 0 0 0 5.5 3.5Z"/>
+                </svg>
+                3.2K contributors
+              </div>
+              <div class="project-stat">
+                <svg class="eye-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 2c1.981 0 3.671.992 4.933 2.078 1.27 1.091 2.187 2.345 2.637 3.023a1.62 1.62 0 0 1 0 1.798c-.45.678-1.367 1.932-2.637 3.023C11.67 13.008 9.981 14 8 14c-1.981 0-3.671-.992-4.933-2.078C1.797 10.83.88 9.576.43 8.898a1.62 1.62 0 0 1 0-1.798c.45-.677 1.367-1.931 2.637-3.022C4.33 2.992 6.019 2 8 2ZM1.679 7.932a.12.12 0 0 0 0 .136c.411.622 1.241 1.75 2.366 2.717C5.176 11.758 6.527 12.5 8 12.5c1.473 0 2.825-.742 3.955-1.715 1.124-.967 1.954-2.096 2.366-2.717a.12.12 0 0 0 0-.136c-.412-.621-1.242-1.75-2.366-2.717C10.824 4.242 9.473 3.5 8 3.5c-1.473 0-2.825.742-3.955 1.715-1.124.967-1.954 2.096-2.366 2.717ZM8 10a2 2 0 1 1-.001-3.999A2 2 0 0 1 8 10Z"/>
+                </svg>
+                Used by 1.2M
+              </div>
+            </div>
+            
+            <div class="language-dots">
+              <div class="language-dot">
+                <span class="dot" style="background-color: #3572A5;"></span>
+                Python 61.2%
+              </div>
+              <div class="language-dot">
+                <span class="dot" style="background-color: #f34b7d;"></span>
+                C++ 24.1%
+              </div>
+            </div>
+            
+            <div style="margin-top: 12px; border-top: 1px solid #30363d; padding-top: 12px;">
+              <p class="stats-title">Your Contributions <span class="rank-info" title="Rank among all contributors">Rank: #142</span></p>
+              <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+                <div class="stats-container">
+                  <span class="stats-number">7</span>
+                  <span class="stats-label">PRs</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">4</span>
+                  <span class="stats-label">Issues</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">2.1K</span>
+                  <span class="stats-label">LOC</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- PyTorch Project -->
+          <div class="project-box" style="border: 1px solid #30363d; border-radius: 6px; padding: 16px;">
+            <div class="project-header">
+              <a href="#" class="project-name">pytorch/pytorch</a>
+              <div class="project-actions">
+                <span class="focus-tag">Machine Learning</span>
+              </div>
+            </div>
+            
+            <div class="project-stats">
+              <div class="project-stat">
+                <svg class="star-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 0L9.79611 5.52786H15.6085L10.9062 8.94427L12.7023 14.4721L8 11.0557L3.29772 14.4721L5.09383 8.94427L0.391548 5.52786H6.20389L8 0Z"/>
+                </svg>
+                69.8K stars
+              </div>
+              <div class="project-stat">
+                <svg class="fork-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/>
+                </svg>
+                19.3K forks
+              </div>
+              <div class="project-stat">
+                <svg class="people-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M2 5.5a3.5 3.5 0 1 1 5.898 2.549 5.508 5.508 0 0 1 3.034 4.084.75.75 0 1 1-1.482.235 4 4 0 0 0-7.9 0 .75.75 0 0 1-1.482-.236A5.507 5.507 0 0 1 3.102 8.05 3.493 3.493 0 0 1 2 5.5ZM11 4a3.001 3.001 0 0 1 2.22 5.018 5.01 5.01 0 0 1 2.56 3.012.749.749 0 0 1-.885.954.752.752 0 0 1-.549-.514 3.507 3.507 0 0 0-2.522-2.372.75.75 0 0 1-.574-.73v-.352a.75.75 0 0 1 .416-.672A1.5 1.5 0 0 0 11 5.5.75.75 0 0 1 11 4Zm-5.5-.5a2 2 0 1 0-.001 3.999A2 2 0 0 0 5.5 3.5Z"/>
+                </svg>
+                2.8K contributors
+              </div>
+              <div class="project-stat">
+                <svg class="eye-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 2c1.981 0 3.671.992 4.933 2.078 1.27 1.091 2.187 2.345 2.637 3.023a1.62 1.62 0 0 1 0 1.798c-.45.678-1.367 1.932-2.637 3.023C11.67 13.008 9.981 14 8 14c-1.981 0-3.671-.992-4.933-2.078C1.797 10.83.88 9.576.43 8.898a1.62 1.62 0 0 1 0-1.798c.45-.677 1.367-1.931 2.637-3.022C4.33 2.992 6.019 2 8 2ZM1.679 7.932a.12.12 0 0 0 0 .136c.411.622 1.241 1.75 2.366 2.717C5.176 11.758 6.527 12.5 8 12.5c1.473 0 2.825-.742 3.955-1.715 1.124-.967 1.954-2.096 2.366-2.717a.12.12 0 0 0 0-.136c-.412-.621-1.242-1.75-2.366-2.717C10.824 4.242 9.473 3.5 8 3.5c-1.473 0-2.825.742-3.955 1.715-1.124.967-1.954 2.096-2.366 2.717ZM8 10a2 2 0 1 1-.001-3.999A2 2 0 0 1 8 10Z"/>
+                </svg>
+                Used by 2.3M
+              </div>
+            </div>
+            
+            <div class="language-dots">
+              <div class="language-dot">
+                <span class="dot" style="background-color: #3572A5;"></span>
+                Python 54.8%
+              </div>
+              <div class="language-dot">
+                <span class="dot" style="background-color: #f34b7d;"></span>
+                C++ 38.2%
+              </div>
+            </div>
+            
+            <div style="margin-top: 12px; border-top: 1px solid #30363d; padding-top: 12px;">
+              <p class="stats-title">Your Contributions <span class="rank-info" title="Rank among all contributors">Rank: #56</span></p>
+              <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+                <div class="stats-container">
+                  <span class="stats-number">5</span>
+                  <span class="stats-label">PRs</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">3</span>
+                  <span class="stats-label">Issues</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">1.5K</span>
+                  <span class="stats-label">LOC</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- DeepFaceLab Project -->
+          <div class="project-box" style="border: 1px solid #30363d; border-radius: 6px; padding: 16px;">
+            <div class="project-header">
+              <a href="#" class="project-name">elizaOS/eliza</a>
+              <div class="project-actions">
+                <span class="focus-tag">AI Agent</span>
+              </div>
+            </div>
+            
+            <div class="project-stats">
+              <div class="project-stat">
+                <svg class="star-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 0L9.79611 5.52786H15.6085L10.9062 8.94427L12.7023 14.4721L8 11.0557L3.29772 14.4721L5.09383 8.94427L0.391548 5.52786H6.20389L8 0Z"/>
+                </svg>
+                15.1K stars
+              </div>
+              <div class="project-stat">
+                <svg class="fork-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/>
+                </svg>
+                4.9K forks
+              </div>
+              <div class="project-stat">
+                <svg class="people-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M2 5.5a3.5 3.5 0 1 1 5.898 2.549 5.508 5.508 0 0 1 3.034 4.084.75.75 0 1 1-1.482.235 4 4 0 0 0-7.9 0 .75.75 0 0 1-1.482-.236A5.507 5.507 0 0 1 3.102 8.05 3.493 3.493 0 0 1 2 5.5ZM11 4a3.001 3.001 0 0 1 2.22 5.018 5.01 5.01 0 0 1 2.56 3.012.749.749 0 0 1-.885.954.752.752 0 0 1-.549-.514 3.507 3.507 0 0 0-2.522-2.372.75.75 0 0 1-.574-.73v-.352a.75.75 0 0 1 .416-.672A1.5 1.5 0 0 0 11 5.5.75.75 0 0 1 11 4Zm-5.5-.5a2 2 0 1 0-.001 3.999A2 2 0 0 0 5.5 3.5Z"/>
+                </svg>
+                557 contributors
+              </div>
+              <div class="project-stat">
+                <svg class="eye-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 2c1.981 0 3.671.992 4.933 2.078 1.27 1.091 2.187 2.345 2.637 3.023a1.62 1.62 0 0 1 0 1.798c-.45.678-1.367 1.932-2.637 3.023C11.67 13.008 9.981 14 8 14c-1.981 0-3.671-.992-4.933-2.078C1.797 10.83.88 9.576.43 8.898a1.62 1.62 0 0 1 0-1.798c.45-.677 1.367-1.931 2.637-3.022C4.33 2.992 6.019 2 8 2ZM1.679 7.932a.12.12 0 0 0 0 .136c.411.622 1.241 1.75 2.366 2.717C5.176 11.758 6.527 12.5 8 12.5c1.473 0 2.825-.742 3.955-1.715 1.124-.967 1.954-2.096 2.366-2.717a.12.12 0 0 0 0-.136c-.412-.621-1.242-1.75-2.366-2.717C10.824 4.242 9.473 3.5 8 3.5c-1.473 0-2.825.742-3.955 1.715-1.124.967-1.954 2.096-2.366 2.717ZM8 10a2 2 0 1 1-.001-3.999A2 2 0 0 1 8 10Z"/>
+                </svg>
+                Used by 100K
+              </div>
+            </div>
+            
+            <div class="language-dots">
+              <div class="language-dot">
+                <span class="dot" style="background-color: #555555;"></span>
+                TypeScript 88.4%
+              </div>
+              <div class="language-dot">
+                <span class="dot" style="background-color: #f1e05a;"></span>
+                Python 4.1%
+              </div>
+            </div>
+            
+            <div style="margin-top: 12px; border-top: 1px solid #30363d; padding-top: 12px;">
+              <p class="stats-title">Your Contributions <span class="rank-info" title="Rank among all contributors">Rank: #18</span></p>
+              <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+                <div class="stats-container">
+                  <span class="stats-number">11</span>
+                  <span class="stats-label">PRs</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">4</span>
+                  <span class="stats-label">Issues</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">4.5K</span>
+                  <span class="stats-label">LOC</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Diffusers Project -->
+          <div class="project-box" style="border: 1px solid #30363d; border-radius: 6px; padding: 16px;">
+            <div class="project-header">
+              <a href="#" class="project-name">huggingface/diffusers</a>
+              <div class="project-actions">
+                <span class="focus-tag">Generative AI</span>
+              </div>
+            </div>
+            
+            <div class="project-stats">
+              <div class="project-stat">
+                <svg class="star-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 0L9.79611 5.52786H15.6085L10.9062 8.94427L12.7023 14.4721L8 11.0557L3.29772 14.4721L5.09383 8.94427L0.391548 5.52786H6.20389L8 0Z"/>
+                </svg>
+                18.7K stars
+              </div>
+              <div class="project-stat">
+                <svg class="fork-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/>
+                </svg>
+                3.2K forks
+              </div>
+              <div class="project-stat">
+                <svg class="people-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M2 5.5a3.5 3.5 0 1 1 5.898 2.549 5.508 5.508 0 0 1 3.034 4.084.75.75 0 1 1-1.482.235 4 4 0 0 0-7.9 0 .75.75 0 0 1-1.482-.236A5.507 5.507 0 0 1 3.102 8.05 3.493 3.493 0 0 1 2 5.5ZM11 4a3.001 3.001 0 0 1 2.22 5.018 5.01 5.01 0 0 1 2.56 3.012.749.749 0 0 1-.885.954.752.752 0 0 1-.549-.514 3.507 3.507 0 0 0-2.522-2.372.75.75 0 0 1-.574-.73v-.352a.75.75 0 0 1 .416-.672A1.5 1.5 0 0 0 11 5.5.75.75 0 0 1 11 4Zm-5.5-.5a2 2 0 1 0-.001 3.999A2 2 0 0 0 5.5 3.5Z"/>
+                </svg>
+                412 contributors
+              </div>
+              <div class="project-stat">
+                <svg class="eye-icon" viewBox="0 0 16 16" fill="#8b949e">
+                  <path d="M8 2c1.981 0 3.671.992 4.933 2.078 1.27 1.091 2.187 2.345 2.637 3.023a1.62 1.62 0 0 1 0 1.798c-.45.678-1.367 1.932-2.637 3.023C11.67 13.008 9.981 14 8 14c-1.981 0-3.671-.992-4.933-2.078C1.797 10.83.88 9.576.43 8.898a1.62 1.62 0 0 1 0-1.798c.45-.677 1.367-1.931 2.637-3.022C4.33 2.992 6.019 2 8 2ZM1.679 7.932a.12.12 0 0 0 0 .136c.411.622 1.241 1.75 2.366 2.717C5.176 11.758 6.527 12.5 8 12.5c1.473 0 2.825-.742 3.955-1.715 1.124-.967 1.954-2.096 2.366-2.717a.12.12 0 0 0 0-.136c-.412-.621-1.242-1.75-2.366-2.717C10.824 4.242 9.473 3.5 8 3.5c-1.473 0-2.825.742-3.955 1.715-1.124.967-1.954 2.096-2.366 2.717ZM8 10a2 2 0 1 1-.001-3.999A2 2 0 0 1 8 10Z"/>
+                </svg>
+                Used by 780K
+              </div>
+            </div>
+            
+            <div class="language-dots">
+              <div class="language-dot">
+                <span class="dot" style="background-color: #3572A5;"></span>
+                Python 92.7%
+              </div>
+              <div class="language-dot">
+                <span class="dot" style="background-color: #555555;"></span>
+                C 5.8%
+              </div>
+            </div>
+            
+            <div style="margin-top: 12px; border-top: 1px solid #30363d; padding-top: 12px;">
+              <p class="stats-title">Your Contributions <span class="rank-info" title="Rank among all contributors">Rank: #23</span></p>
+              <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+                <div class="stats-container">
+                  <span class="stats-number">4</span>
+                  <span class="stats-label">PRs</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">6</span>
+                  <span class="stats-label">Issues</span>
+                </div>
+                <div class="stats-container">
+                  <span class="stats-number">1.2K</span>
+                  <span class="stats-label">LOC</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

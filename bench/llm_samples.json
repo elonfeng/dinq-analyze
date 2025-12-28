@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "defaults": {
+    "timeout_s": 45,
+    "temperature": 0.2,
+    "max_tokens": 900
+  },
+  "tasks": [
+    {
+      "task": "github_enrich_bundle",
+      "expect_json": true,
+      "timeout_s": 25,
+      "temperature": 0.2,
+      "max_tokens": 900,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are an expert GitHub developer analyst.\nGiven a compact profile + contribution summary, produce structured outputs for a UI.\n\nReturn ONLY valid JSON. Do not wrap in markdown (no ``` fences).\nReturn ONLY valid JSON with keys:\ndescription, valuation_and_level, role_model, roast, most_valuable_pull_request, feature_project_tags.\n\nRules:\n- description: 1-2 sentences.\n- valuation_and_level must include: level (non-empty), salary_range, total_compensation, reasoning.\n- role_model must be an object with: name, github (optional), similarity_score (0-1), reason.\n- roast: 1 short paragraph (keep it playful but not offensive).\n- most_valuable_pull_request must be an object with: repository, url, title, additions, deletions, reason, impact.\n- feature_project_tags: 3-6 short tags.\nIf some fields are unknown, make best-effort guesses but keep them plausible.\n"
+        },
+        {
+          "role": "user",
+          "content": "{\"login\":\"octocat\",\"user\":{\"name\":\"The Octocat\",\"bio\":\"Software engineer. Open-source enthusiast.\",\"createdAt\":\"2012-03-14T00:00:00Z\",\"url\":\"https://github.com/octocat\",\"issues_total\":42,\"pull_requests_total\":380,\"repos_total\":28},\"overview\":{\"work_experience\":7,\"stars\":1200,\"active_days\":210,\"languages\":[\"Go\",\"Python\",\"TypeScript\"],\"topics\":[\"distributed-systems\",\"developer-tools\",\"ml\"],\"recent_activity\":{\"commits_90d\":185,\"prs_90d\":24,\"issues_90d\":18}},\"code_contribution\":{\"contributionCalendar\":{\"totalContributions\":1540,\"weeks\":[]}},\"feature_project\":{\"name\":\"api-gateway\",\"nameWithOwner\":\"octocat/api-gateway\",\"url\":\"https://github.com/octocat/api-gateway\",\"description\":\"A high-performance gateway with auth, billing, and routing.\",\"stargazerCount\":860,\"forkCount\":120},\"top_projects\":[{\"nameWithOwner\":\"octocat/api-gateway\",\"url\":\"https://github.com/octocat/api-gateway\",\"stargazerCount\":860,\"forkCount\":120,\"description\":\"Gateway with auth/billing/routing.\"},{\"nameWithOwner\":\"octocat/streaming-jobs\",\"url\":\"https://github.com/octocat/streaming-jobs\",\"stargazerCount\":410,\"forkCount\":55,\"description\":\"Job system with SSE replay.\"},{\"nameWithOwner\":\"octocat/llm-bench\",\"url\":\"https://github.com/octocat/llm-bench\",\"stargazerCount\":260,\"forkCount\":22,\"description\":\"LLM benchmarking harness.\"}],\"pull_request_candidates\":[{\"repository\":\"octocat/api-gateway\",\"url\":\"https://github.com/octocat/api-gateway/pull/128\",\"title\":\"Add per-key concurrency limiter and retry budget\",\"additions\":820,\"deletions\":210,\"comment_rank\":0},{\"repository\":\"octocat/streaming-jobs\",\"url\":\"https://github.com/octocat/streaming-jobs/pull/77\",\"title\":\"Persist terminal events and replay on reconnect\",\"additions\":540,\"deletions\":98,\"comment_rank\":1},{\"repository\":\"octocat/llm-bench\",\"url\":\"https://github.com/octocat/llm-bench/pull/12\",\"title\":\"Add JSON schema validator + score ranking\",\"additions\":310,\"deletions\":45,\"comment_rank\":2},{\"repository\":\"octocat/api-gateway\",\"url\":\"https://github.com/octocat/api-gateway/pull/96\",\"title\":\"Hedge requests for strict JSON tasks\",\"additions\":260,\"deletions\":88,\"comment_rank\":3},{\"repository\":\"octocat/streaming-jobs\",\"url\":\"https://github.com/octocat/streaming-jobs/pull/51\",\"title\":\"Improve progress events compaction\",\"additions\":120,\"deletions\":32,\"comment_rank\":4}]}"
+        }
+      ]
+    },
+    {
+      "task": "linkedin_enrich_bundle",
+      "expect_json": true,
+      "timeout_s": 40,
+      "temperature": 0.3,
+      "max_tokens": 1400,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are an expert LinkedIn profile analyst.\nReturn ONLY valid JSON. Do not wrap in markdown.\nAll text must be in English.\nNever output 'No data' placeholders. If data is missing, infer a reasonable, conservative answer.\n"
+        },
+        {
+          "role": "user",
+          "content": "{\"person_name\":\"Alex Chen\",\"profile\":{\"fullName\":\"Alex Chen\",\"headline\":\"Staff Software Engineer | Infra & Platform\",\"location\":\"San Francisco Bay Area\",\"companyName\":\"Acme Cloud\",\"companyIndustry\":\"Cloud Infrastructure\",\"connections\":500,\"followers\":2400,\"about\":\"Building developer platforms and internal tooling. Previously at two high-growth startups.\",\"experiences\":[{\"title\":\"Staff Software Engineer\",\"company\":\"Acme Cloud\",\"dateRange\":\"2022 - Present\",\"description\":\"Led gateway + billing platform; improved p95 by 40%.\"},{\"title\":\"Senior Software Engineer\",\"company\":\"Rocket SaaS\",\"dateRange\":\"2019 - 2022\",\"description\":\"Owned realtime pipeline; built SSE replay and caching.\"}],\"educations\":[{\"school\":\"University of Washington\",\"degree\":\"B.S. Computer Science\",\"dateRange\":\"2015 - 2019\"}],\"skills\":[\"Go\",\"Python\",\"Distributed Systems\",\"Caching\",\"PostgreSQL\",\"Redis\",\"Observability\",\"LLM Integration\",\"API Design\",\"System Design\"]},\"instructions\":{\"skills\":\"Return 3-6 items per list; use concise noun phrases.\",\"career\":\"Keep advice specific and actionable; avoid generic clichés.\",\"summaries\":\"work_experience_summary 40-60 words; education_summary 30-50 words.\",\"money\":\"Return aggressive but plausible ranges, following the schema; keep explanation 50-70 words.\",\"about\":\"If profile.about is empty, generate a 40-60 word first-person about section.\",\"tags\":\"Return 4-6 personal_tags (Title Case).\"},\"output_schema\":{\"skills\":{\"industry_knowledge\":[\"string\"],\"tools_technologies\":[\"string\"],\"interpersonal_skills\":[\"string\"],\"language\":[\"string\"]},\"career\":{\"future_development_potential\":\"string\",\"simplified_future_development_potential\":\"string\",\"development_advice\":{\"past_evaluation\":\"string\",\"simplified_past_evaluation\":\"string\",\"future_advice\":\"string\"}},\"work_experience_summary\":\"string\",\"education_summary\":\"string\",\"money\":{\"years_of_experience\":{\"years\":0,\"start_year\":0,\"calculation_basis\":\"string\"},\"level_us\":\"string\",\"level_cn\":\"string\",\"estimated_salary\":\"string\",\"explanation\":\"string\"},\"summary\":{\"about\":\"string\",\"personal_tags\":[\"string\"]}}}"
+        }
+      ]
+    },
+    {
+      "task": "scholar_summary",
+      "expect_json": false,
+      "timeout_s": 25,
+      "temperature": 0.4,
+      "max_tokens": 900,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a rigorous but fair talent evaluator.\nWrite in Markdown. Keep it concise, specific, and actionable.\n\nOutput format rules (STRICT):\n1) Use EXACTLY these section markers, each on its own line, in this order:\n<!--section:overview-->\n<!--section:strengths-->\n<!--section:risks-->\n<!--section:questions-->\n2) After each marker, write that section's content (Markdown paragraphs/bullets).\n3) Do NOT add any other headings or section titles outside the markers.\n4) Do NOT repeat the markers.\n"
+        },
+        {
+          "role": "user",
+          "content": "Scholar profile signals (JSON):\n{\"name\":\"Dr. Jane Doe\",\"affiliation\":\"Example University\",\"research_fields\":[\"Machine Learning\",\"Systems\",\"NLP\"],\"metrics\":{\"total_citations\":12450,\"citations_5y\":8600,\"h_index\":45,\"h_index_5y\":38,\"total_papers\":95,\"top_tier_papers\":22},\"highlights\":{\"most_cited_paper\":{\"title\":\"Efficient Transformers at Scale\",\"year\":2020,\"venue\":\"NeurIPS\",\"citations\":2100,\"url\":\"\"},\"paper_of_year\":{\"title\":\"Fast RAG Pipelines\",\"year\":2023,\"venue\":\"ICLR\",\"citations\":320,\"url\":\"\"},\"recent_year_distribution\":{\"2024\":8,\"2023\":11,\"2022\":9,\"2021\":10,\"2020\":7,\"2019\":6},\"coauthors\":{\"total\":180,\"top\":[{\"name\":\"A. Smith\",\"count\":9},{\"name\":\"B. Lee\",\"count\":7},{\"name\":\"C. Wang\",\"count\":6}]},\"rating\":{\"overall\":8.4,\"notes\":\"Strong and consistent output; clear systems + ML blend.\"}}}"
+        }
+      ]
+    },
+    {
+      "task": "scholar_level_fast",
+      "expect_json": true,
+      "timeout_s": 20,
+      "temperature": 0.2,
+      "max_tokens": 700,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are an expert research career evaluator.\nGiven a compact scholar profile summary, estimate career level in CN/US and provide a short justification.\nReturn ONLY valid JSON.\n\nSchema:\n{\n  \"earnings\": \"string (annual USD total compensation estimate)\",\n  \"level_cn\": \"string (e.g., P7)\",\n  \"level_us\": \"string (e.g., L5)\",\n  \"justification\": \"string (2-4 sentences)\",\n  \"evaluation_bars\": {\n    \"depth_vs_breadth\": {\"score\": 0, \"explanation\": \"string\"},\n    \"theory_vs_practice\": {\"score\": 0, \"explanation\": \"string\"},\n    \"individual_vs_team\": {\"score\": 0, \"explanation\": \"string\"}\n  },\n  \"years_of_experience\": {\"years\": 0, \"start_year\": 0, \"calculation_basis\": \"string\"}\n}\nRules:\n- scores are integers 1-10.\n- be conservative; avoid wild claims.\n"
+        },
+        {
+          "role": "user",
+          "content": "{\"name\":\"Dr. Jane Doe\",\"affiliation\":\"Example University\",\"research_fields\":[\"Machine Learning\",\"Systems\",\"NLP\"],\"metrics\":{\"total_citations\":12450,\"citations_5y\":8600,\"h_index\":45,\"h_index_5y\":38,\"total_papers\":95},\"highlights\":{\"most_cited_paper\":{\"title\":\"Efficient Transformers at Scale\",\"year\":2020,\"venue\":\"NeurIPS\",\"citations\":2100,\"url\":\"\"},\"paper_of_year\":{\"title\":\"Fast RAG Pipelines\",\"year\":2023,\"venue\":\"ICLR\",\"citations\":320,\"url\":\"\"},\"top_tier\":[\"NeurIPS\",\"ICLR\",\"ACL\"]}}"
+        }
+      ]
+    },
+    {
+      "task": "github_best_pr",
+      "expect_json": true,
+      "timeout_s": 15,
+      "temperature": 0.2,
+      "max_tokens": 260,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are an expert GitHub analyst.\nYou are given a list of pull requests (PRs) for a developer.\nThe PR list is ordered by comment count DESC (most discussed first).\n\nReturn ONLY valid JSON. Do not wrap in markdown (no ``` fences).\n\nPick the single most valuable PR.\nReturn ONLY valid JSON with keys:\nrepository, url, title, additions, deletions, reason, impact.\n- reason: 1-2 short sentences.\n- impact: <= 20 words.\n"
+        },
+        {
+          "role": "user",
+          "content": "[{\"repository\":\"octocat/api-gateway\",\"url\":\"https://github.com/octocat/api-gateway/pull/128\",\"title\":\"Add per-key concurrency limiter and retry budget\",\"additions\":820,\"deletions\":210,\"comment_rank\":0},{\"repository\":\"octocat/streaming-jobs\",\"url\":\"https://github.com/octocat/streaming-jobs/pull/77\",\"title\":\"Persist terminal events and replay on reconnect\",\"additions\":540,\"deletions\":98,\"comment_rank\":1},{\"repository\":\"octocat/llm-bench\",\"url\":\"https://github.com/octocat/llm-bench/pull/12\",\"title\":\"Add JSON schema validator + score ranking\",\"additions\":310,\"deletions\":45,\"comment_rank\":2},{\"repository\":\"octocat/api-gateway\",\"url\":\"https://github.com/octocat/api-gateway/pull/96\",\"title\":\"Hedge requests for strict JSON tasks\",\"additions\":260,\"deletions\":88,\"comment_rank\":3},{\"repository\":\"octocat/streaming-jobs\",\"url\":\"https://github.com/octocat/streaming-jobs/pull/51\",\"title\":\"Improve progress events compaction\",\"additions\":120,\"deletions\":32,\"comment_rank\":4},{\"repository\":\"octocat/api-gateway\",\"url\":\"https://github.com/octocat/api-gateway/pull/83\",\"title\":\"Add circuit breaker for 429/5xx\",\"additions\":180,\"deletions\":60,\"comment_rank\":5}]"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DINQ Gateway Analyze Playground</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>DINQ Gateway Analyze Playground</h1>
+      <p>前端只调用 Gateway（默认 <code>http://127.0.0.1:8001</code>，也可用 <code>https://api.dinq.me</code>）：Create Job / Job Status / Stream（SSE）。</p>
+    </header>
+
+    <section class="panel">
+      <div class="panel-title">Connection</div>
+      <div class="controls">
+        <label>
+          API Base
+          <input id="apiBase" type="text" value="http://127.0.0.1:8001" />
+        </label>
+        <label class="span-2">
+          Bearer JWT (Authorization)
+          <textarea id="token" rows="2" placeholder="Paste JWT here (without 'Bearer ')"></textarea>
+        </label>
+        <label class="checkbox">
+          <input id="includeTokenInCurl" type="checkbox" />
+          Copy curl includes token
+        </label>
+        <label class="checkbox">
+          <input id="debugMode" type="checkbox" />
+          Debug mode (show raw JSON / stream / event log)
+        </label>
+        <button id="saveSettings" type="button">Save Settings</button>
+        <button id="clearSettings" type="button" class="secondary">Clear Settings</button>
+      </div>
+      <div class="hint">
+        SSE 必须带 Authorization header，所以本页面用 <code>fetch()</code> 读取 <code>ReadableStream</code>（不使用原生 EventSource）。
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Source</div>
+      <nav class="tabs">
+        <button class="tab active" data-source="scholar">Scholar</button>
+        <button class="tab" data-source="github">GitHub</button>
+        <button class="tab" data-source="linkedin">LinkedIn</button>
+      </nav>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Create Job</div>
+      <div class="controls">
+        <label class="span-2">
+          input.content
+          <textarea id="content" rows="2" placeholder="Scholar: id/url/name · GitHub: login/url/name · LinkedIn: url/name"></textarea>
+        </label>
+        <label>
+          Mode
+          <select id="mode">
+            <option value="async" selected>async</option>
+            <option value="sync">sync</option>
+          </select>
+        </label>
+        <label class="checkbox">
+          <input id="freeform" type="checkbox" />
+          options.freeform（模糊输入先推荐候选）
+        </label>
+        <label class="checkbox">
+          <input id="forceRefresh" type="checkbox" />
+          options.force_refresh（强制重算）
+        </label>
+        <label class="checkbox">
+          <input id="omitCards" type="checkbox" checked />
+          Use default cards（不发送 cards 字段）
+        </label>
+        <label class="span-2">
+          Cards (comma-separated)
+          <input id="cards" type="text" value="profile,metrics,papers,citations,coauthors,role_model,news,level,summary" />
+        </label>
+        <label class="span-2">
+          Idempotency-Key (optional)
+          <div class="inline">
+            <input id="idempotencyKey" type="text" placeholder="(optional) for retry safety" />
+            <button id="genIdempotencyKey" type="button" class="secondary">Generate</button>
+          </div>
+        </label>
+
+        <button id="create" type="button">Create</button>
+        <button id="createAndStream" type="button">Create + Stream</button>
+        <button id="copyCurl" type="button" class="secondary">Copy curl</button>
+        <button id="saveScreenshot" type="button" class="secondary">Save Screenshot</button>
+        <button id="loadMock" type="button" class="secondary">Load Mock</button>
+      </div>
+      <div class="hint">
+        提示：不确定账号/ID 时，勾选 <code>options.freeform</code>，先拿 candidates（不会创建 job），用户确认后再发起第二次 Create。
+      </div>
+    </section>
+
+    <section class="panel" id="candidatesPanel" hidden>
+      <div class="panel-title">Needs Confirmation (freeform)</div>
+      <div class="hint" id="candidatesMessage"></div>
+      <div class="candidates" id="candidates"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Job</div>
+      <div class="controls">
+        <label class="span-2">
+          Job ID
+          <input id="jobId" type="text" placeholder="auto after create; you can paste an existing job id" />
+        </label>
+        <label>
+          Stream after (seq)
+          <input id="afterSeq" type="number" min="0" placeholder="0" />
+        </label>
+        <button id="fetchStatus" type="button" class="secondary">Get Status</button>
+        <button id="streamLast" type="button">Stream (after last seq)</button>
+        <button id="streamFromStart" type="button" class="secondary">Stream (after 0)</button>
+        <button id="streamAtSeq" type="button" class="secondary">Stream (after input)</button>
+        <button id="stop" type="button" class="danger" disabled>Stop Stream</button>
+        <button id="clearLog" type="button" class="secondary">Clear Log</button>
+      </div>
+    </section>
+
+    <section class="status">
+      <div>Status: <span id="jobStatus">idle</span></div>
+      <div>Last Event: <span id="lastEvent">-</span></div>
+      <div>Last Seq: <span id="lastSeq">0</span></div>
+      <div>Next after: <span id="nextAfter">0</span></div>
+    </section>
+
+    <section class="grid" id="cardsContainer"></section>
+
+    <section class="panel" id="recentJobsPanel">
+      <div class="panel-title">Recent Jobs</div>
+      <div class="hint">本地浏览器会保存最近的 job_id，方便复现/续传/对比 cache hit。</div>
+      <div class="recent-jobs" id="recentJobs"></div>
+    </section>
+
+    <section class="log">
+      <h2>Event Log</h2>
+      <pre id="log"></pre>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

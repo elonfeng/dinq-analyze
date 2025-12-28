@@ -1,0 +1,721 @@
+[
+  {
+    "name": "Geoffrey Hinton",
+    "scholar_id": "JicYPdAAAAAJ",
+    "collaborator_name": "Geoffrey Hinton",
+    "collaborator_affiliation": "Vector Institute for Artificial Intelligence",
+    "coauthored_papers": 58,
+    "best_paper": {
+      "title": "Imagenet classification with deep convolutional neural networks",
+      "year": "2012",
+      "venue": "NeurIPS 2012",
+      "original_venue": "Advances in neural information processing systems 25, 2012",
+      "citations": "175807"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Yoshua Bengio",
+    "scholar_id": "kukA0LcAAAAJ",
+    "collaborator_name": "Ian Goodfellow",
+    "collaborator_affiliation": "DeepMind",
+    "coauthored_papers": 21,
+    "best_paper": {
+      "title": "Generative adversarial nets",
+      "year": "2014",
+      "venue": "NeurIPS 2014",
+      "original_venue": "Advances in neural information processing systems 27, 2014",
+      "citations": "95075"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Kaiming He",
+    "scholar_id": "DhtAFkwAAAAJ",
+    "collaborator_name": "Jian Sun",
+    "collaborator_affiliation": "Megvii Technology",
+    "coauthored_papers": 32,
+    "best_paper": {
+      "title": "Deep Residual Learning for Image Recognition",
+      "year": "2016",
+      "venue": "CVPR 2016",
+      "original_venue": "Computer Vision and Pattern Recognition (CVPR), 2016, 2016",
+      "citations": "274069"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Ilya Sutskever",
+    "scholar_id": "x04W_mMAAAAJ",
+    "collaborator_name": "Yangqing Jia",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 30,
+    "best_paper": {
+      "title": "Tensorflow: Large-scale machine learning on heterogeneous distributed systems",
+      "year": "2016",
+      "venue": "arXiv preprint arXiv:1603.04467, 2016 2016",
+      "original_venue": "arXiv preprint arXiv:1603.04467, 2016",
+      "citations": "59247"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Jian Sun",
+    "scholar_id": "ALVSZAYAAAAJ",
+    "collaborator_name": "Xiangyu Zhang",
+    "collaborator_affiliation": "StepFun",
+    "coauthored_papers": 33,
+    "best_paper": {
+      "title": "Deep residual learning for image recognition",
+      "year": "2016",
+      "venue": "CVPR 2016",
+      "original_venue": "Proceedings of the IEEE conference on computer vision and pattern …, 2016",
+      "citations": "266798"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Ross Girshick",
+    "scholar_id": "W8VIEZgAAAAJ",
+    "collaborator_name": "Kaiming He",
+    "collaborator_affiliation": "Associate Professor, EECS, MIT",
+    "coauthored_papers": 32,
+    "best_paper": {
+      "title": "Faster R-CNN: Towards real-time object detection with region proposal networks",
+      "year": "2015",
+      "venue": "NeurIPS 2015",
+      "original_venue": "Advances in neural information processing systems, 91-99, 2015",
+      "citations": "89913"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Andrew Zisserman",
+    "scholar_id": "UZ5wscMAAAAJ",
+    "collaborator_name": "Andrea Vedaldi",
+    "collaborator_affiliation": "University of Oxford",
+    "coauthored_papers": 16,
+    "best_paper": {
+      "title": "Deep inside convolutional networks: Visualising image classification models and saliency maps",
+      "year": "2013",
+      "venue": "arXiv preprint arXiv:1312.6034, 2013 2013",
+      "original_venue": "arXiv preprint arXiv:1312.6034, 2013",
+      "citations": "9610"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Shaoqing Ren",
+    "scholar_id": "AUhj438AAAAJ",
+    "collaborator_name": "Jian Sun",
+    "collaborator_affiliation": "Megvii Technology Ltd.",
+    "coauthored_papers": 20,
+    "best_paper": {
+      "title": "Deep residual learning for image recognition",
+      "year": "2016",
+      "venue": "CVPR 2016",
+      "original_venue": "Proceedings of the IEEE conference on computer vision and pattern …, 2016",
+      "citations": "269081"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Yann LeCun",
+    "scholar_id": "WLN3QrAAAAAJ",
+    "collaborator_name": "Yann LeCun",
+    "collaborator_affiliation": "Meta (formerly Facebook)",
+    "coauthored_papers": 12,
+    "best_paper": {
+      "title": "Backpropagation applied to handwritten zip code recognition",
+      "year": "1989",
+      "venue": "Neural computation 1 (4), 541-551, 1989 1989",
+      "original_venue": "Neural computation 1 (4), 541-551, 1989",
+      "citations": "18723"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Xiangyu Zhang",
+    "scholar_id": "yuB-cfoAAAAJ",
+    "collaborator_name": "Jian Sun",
+    "collaborator_affiliation": "Chief Scientist of Megvii, Managing Director of Megvii Research",
+    "coauthored_papers": 64,
+    "best_paper": {
+      "title": "Deep residual learning for image recognition",
+      "year": "2016",
+      "venue": "CVPR 2016",
+      "original_venue": "Proceedings of the IEEE conference on computer vision and pattern …, 2016",
+      "citations": "266743"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Ian Goodfellow",
+    "scholar_id": "iYN86KEAAAAJ",
+    "collaborator_name": "Ian Goodfellow",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 30,
+    "best_paper": {
+      "title": "Generative adversarial networks",
+      "year": "2014",
+      "venue": "NeurIPS 2014",
+      "original_venue": "Advances in neural information processing systems 27, 2014",
+      "citations": "95092"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Jeff Dean",
+    "scholar_id": "NMS69lQAAAAJ",
+    "collaborator_name": "Jeff Dean",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 48,
+    "best_paper": {
+      "title": "{TensorFlow}: a system for {Large-Scale} machine learning",
+      "year": "2016",
+      "venue": "OSDI 2016",
+      "original_venue": "12th USENIX symposium on operating systems design and implementation (OSDI …, 2016",
+      "citations": "59709"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Oriol Vinyals",
+    "scholar_id": "NkzyCvUAAAAJ",
+    "collaborator_name": "Jeff Dean",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 46,
+    "best_paper": {
+      "title": "TensorFlow: Large-scale machine learning on heterogeneous systems, 2015",
+      "year": "",
+      "venue": "TensorFlow: Large-scale machine learning on heterogeneous systems, 2015 2015",
+      "original_venue": "Software available from tensorflow. org, 0",
+      "citations": "59640"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Alex Krizhevsky",
+    "scholar_id": "xegzhJcAAAAJ",
+    "collaborator_name": "Ilya Sutskever",
+    "collaborator_affiliation": "OpenAI",
+    "coauthored_papers": 33,
+    "best_paper": {
+      "title": "Imagenet classification with deep convolutional neural networks",
+      "year": "2012",
+      "venue": "NeurIPS 2012",
+      "original_venue": "Advances in neural information processing systems 25, 2012",
+      "citations": "175623"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Christian Szegedy",
+    "scholar_id": "bnQMuzgAAAAJ",
+    "collaborator_name": "Dumitru Erhan",
+    "collaborator_affiliation": "Google DeepMind",
+    "coauthored_papers": 24,
+    "best_paper": {
+      "title": "Going deeper with convolutions",
+      "year": "2015",
+      "venue": "CVPR 2015",
+      "original_venue": "Proceedings of the IEEE conference on computer vision and pattern …, 2015",
+      "citations": "67803"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Quoc V. Le",
+    "scholar_id": "vfT6-XIAAAAJ",
+    "collaborator_name": "Quoc V. Le",
+    "collaborator_affiliation": "Research Scientist, Google",
+    "coauthored_papers": 59,
+    "best_paper": {
+      "title": "Sequence to sequence learning with neural networks",
+      "year": "2014",
+      "venue": "arXiv preprint arXiv:1409.3215, 2014 2014",
+      "original_venue": "arXiv preprint arXiv:1409.3215, 2014",
+      "citations": "29259"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Trevor Darrell",
+    "scholar_id": "bh-uRFMAAAAJ",
+    "collaborator_name": "Kate Saenko",
+    "collaborator_affiliation": "Boston University; Meta (FAIR Labs)",
+    "coauthored_papers": 16,
+    "best_paper": {
+      "title": "Adversarial discriminative domain adaptation",
+      "year": "2017",
+      "venue": "CVPR 2017",
+      "original_venue": "Proceedings of the IEEE conference on computer vision and pattern …, 2017",
+      "citations": "6106"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Li Fei-Fei",
+    "scholar_id": "rDfyQnIAAAAJ",
+    "collaborator_name": "Fei-Fei Li",
+    "collaborator_affiliation": "Google (as Chief Scientist of AI/ML at Google Cloud)",
+    "coauthored_papers": 12,
+    "best_paper": {
+      "title": "Imagenet: A large-scale hierarchical image database",
+      "year": "2009",
+      "venue": "CVPR 2009",
+      "original_venue": "Computer Vision and Pattern Recognition, 2009. CVPR 2009. IEEE Conference on …, 2009",
+      "citations": "84219"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Andrew Ng",
+    "scholar_id": "mG4imMEAAAAJ",
+    "collaborator_name": "Andrew Ng",
+    "collaborator_affiliation": "Landing AI",
+    "coauthored_papers": 55,
+    "best_paper": {
+      "title": "Latent dirichlet allocation",
+      "year": "2003",
+      "venue": "JMLR 2003",
+      "original_venue": "Journal of machine Learning research 3 (Jan), 993-1022, 2003",
+      "citations": "57847"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Diederik P. Kingma",
+    "scholar_id": "yyIoQu4AAAAJ",
+    "collaborator_name": "Diederik P. Kingma",
+    "collaborator_affiliation": "Other namesDurk Kingma, Diederik Pieter Kingma",
+    "coauthored_papers": 50,
+    "best_paper": {
+      "title": "Adam: A method for stochastic optimization",
+      "year": "2014",
+      "venue": "arXiv preprint arXiv:1412.6980, 2014 2014",
+      "original_venue": "arXiv preprint arXiv:1412.6980, 2014",
+      "citations": "217859"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Christopher D Manning",
+    "scholar_id": "1zmDOdwAAAAJ",
+    "collaborator_name": "Christopher D. Manning",
+    "collaborator_affiliation": "Stanford University",
+    "coauthored_papers": 87,
+    "best_paper": {
+      "title": "GloVe: Global vectors for word representation",
+      "year": "2014",
+      "venue": "EMNLP 2014",
+      "original_venue": "2014 conference on empirical methods in natural language processing (EMNLP …, 2014",
+      "citations": "45705"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Juergen Schmidhuber",
+    "scholar_id": "gLnCTgIAAAAJ",
+    "collaborator_name": "Alex Graves",
+    "collaborator_affiliation": "DeepMind",
+    "coauthored_papers": 14,
+    "best_paper": {
+      "title": "Connectionist temporal classification: labelling unsegmented sequence data with recurrent neural networks",
+      "year": "2006",
+      "venue": "ICML 2006",
+      "original_venue": "Proceedings of the 23rd international conference on Machine learning, 369-376, 2006",
+      "citations": "7676"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Jimmy Ba",
+    "scholar_id": "ymzxRhAAAAAJ",
+    "collaborator_name": "Diederik P. Kingma",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 15,
+    "best_paper": {
+      "title": "Adam: A Method for Stochastic Optimization. international conference on learning representations (2015)",
+      "year": "2015",
+      "venue": "San Diego, California, 2015 2015",
+      "original_venue": "San Diego, California, 2015",
+      "citations": "502"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Karen Simonyan",
+    "scholar_id": "L7lMQkQAAAAJ",
+    "collaborator_name": "Oriol Vinyals",
+    "collaborator_affiliation": "Google DeepMind",
+    "coauthored_papers": 33,
+    "best_paper": {
+      "title": "Mastering the game of go without human knowledge",
+      "year": "2017",
+      "venue": "Nature 2017",
+      "original_venue": "nature 550 (7676), 354-359, 2017",
+      "citations": "12259"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Jitendra Malik",
+    "scholar_id": "aOklxsQAAAAJ",
+    "collaborator_name": "Jitendra Malik",
+    "collaborator_affiliation": "Facebook AI Research",
+    "coauthored_papers": 91,
+    "best_paper": {
+      "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+      "year": "2014",
+      "venue": "CVPR 2014",
+      "original_venue": "Proceedings of the IEEE conference on computer vision and pattern …, 2014",
+      "citations": "42480"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Luc Van Gool",
+    "scholar_id": "TwMib_QAAAAJ",
+    "collaborator_name": "Luc Van Gool",
+    "collaborator_affiliation": "INSAIT - Sofia University",
+    "coauthored_papers": 81,
+    "best_paper": {
+      "title": "BSurf: Speeded up robust features,’’Computer Vision ECCV 2006",
+      "year": "2006",
+      "venue": "Science 2006",
+      "original_venue": "Lecture Notes in Computer Science, 404-417, 2006",
+      "citations": "39476"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Piotr Doll¨¢r",
+    "scholar_id": "a8Y2OJMAAAAJ",
+    "collaborator_name": "Ross Girshick",
+    "collaborator_affiliation": "Allen Institute for Artificial Intelligence (AI2)",
+    "coauthored_papers": 25,
+    "best_paper": {
+      "title": "Mask r-cnn",
+      "year": "2017",
+      "venue": "ICCV 2017",
+      "original_venue": "Computer Vision (ICCV), 2017 IEEE International Conference on, 2980-2988, 2017",
+      "citations": "43247"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "koray kavukcuoglu",
+    "scholar_id": "sGFyDIUAAAAJ",
+    "collaborator_name": "David Silver",
+    "collaborator_affiliation": "Google DeepMind",
+    "coauthored_papers": 63,
+    "best_paper": {
+      "title": "Human-level control through deep reinforcement learning",
+      "year": "2015",
+      "venue": "Nature 2015",
+      "original_venue": "nature 518 (7540), 529-533, 2015",
+      "citations": "35284"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Ruslan Salakhutdinov",
+    "scholar_id": "ITZ1e7MAAAAJ",
+    "collaborator_name": "RR Salakhutdinov",
+    "collaborator_affiliation": "Apple",
+    "coauthored_papers": 24,
+    "best_paper": {
+      "title": "Reducing the dimensionality of data with neural networks",
+      "year": "2006",
+      "venue": "Science 2006",
+      "original_venue": "science 313 (5786), 504-507, 2006",
+      "citations": "25043"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "David Silver",
+    "scholar_id": "-8DNE4UAAAAJ",
+    "collaborator_name": "David Silver",
+    "collaborator_affiliation": "Google DeepMind",
+    "coauthored_papers": 58,
+    "best_paper": {
+      "title": "Human-level control through deep reinforcement learning",
+      "year": "2015",
+      "venue": "Nature 2015",
+      "original_venue": "nature 518 (7540), 529-533, 2015",
+      "citations": "35284"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Lukasz Kaiser",
+    "scholar_id": "JWmiQR0AAAAJ",
+    "collaborator_name": "Ashish Vaswani",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 55,
+    "best_paper": {
+      "title": "Attention is all you need",
+      "year": "2017",
+      "venue": "NeurIPS 2017",
+      "original_venue": "Advances in neural information processing systems 30, 2017",
+      "citations": "178807"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Jakob Uszkoreit",
+    "scholar_id": "mOG0bwsAAAAJ",
+    "collaborator_name": "No frequent collaborator found",
+    "collaborator_affiliation": "N/A",
+    "coauthored_papers": 0,
+    "best_paper": {
+      "title": "N/A",
+      "year": "N/A",
+      "venue": "N/A",
+      "citations": 0
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Richard Socher",
+    "scholar_id": "FaOcyfMAAAAJ",
+    "collaborator_name": "Caiming Xiong",
+    "collaborator_affiliation": "Salesforce",
+    "coauthored_papers": 49,
+    "best_paper": {
+      "title": "Pointer sentinel mixture models",
+      "year": "2016",
+      "venue": "arXiv preprint arXiv:1609.07843, 2016 2016",
+      "original_venue": "arXiv preprint arXiv:1609.07843, 2016",
+      "citations": "2879"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Noam Shazeer",
+    "scholar_id": "wsGvgA8AAAAJ",
+    "collaborator_name": "Ashish Vaswani",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 45,
+    "best_paper": {
+      "title": "Attention is all you need",
+      "year": "2017",
+      "venue": "NeurIPS 2017",
+      "original_venue": "Advances in neural information processing systems 30, 2017",
+      "citations": "179225"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Serge Belongie",
+    "scholar_id": "chD5XxkAAAAJ",
+    "collaborator_name": "Pietro Perona",
+    "collaborator_affiliation": "Amazon",
+    "coauthored_papers": 17,
+    "best_paper": {
+      "title": "Microsoft coco: Common objects in context",
+      "year": "2014",
+      "venue": "ECCV 2014",
+      "original_venue": "Computer vision–ECCV 2014: 13th European conference, zurich, Switzerland …, 2014",
+      "citations": "58945"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Jure Leskovec",
+    "scholar_id": "Q_kKkIUAAAAJ",
+    "collaborator_name": "Jon Kleinberg",
+    "collaborator_affiliation": "Cornell University",
+    "coauthored_papers": 12,
+    "best_paper": {
+      "title": "Graph evolution: Densification and shrinking diameters",
+      "year": "2007",
+      "venue": "KDD 2007",
+      "original_venue": "ACM transactions on Knowledge Discovery from Data (TKDD) 1 (1), 2-es, 2007",
+      "citations": "3508"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Thomas Brox",
+    "scholar_id": "0VAe-TQAAAAJ",
+    "collaborator_name": "Alexey Dosovitskiy",
+    "collaborator_affiliation": "Intel",
+    "coauthored_papers": 19,
+    "best_paper": {
+      "title": "Striving for simplicity: The all convolutional net",
+      "year": "2014",
+      "venue": "arXiv preprint arXiv:1412.6806, 2014 2014",
+      "original_venue": "arXiv preprint arXiv:1412.6806, 2014",
+      "citations": "6247"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Demis Hassabis",
+    "scholar_id": "dYpPMQEAAAAJ",
+    "collaborator_name": "Alex Graves",
+    "collaborator_affiliation": "Google DeepMind",
+    "coauthored_papers": 70,
+    "best_paper": {
+      "title": "Human-level control through deep reinforcement learning",
+      "year": "2015",
+      "venue": "Nature 2015",
+      "original_venue": "Nature 518 (7540), 529-533, 2015",
+      "citations": "35293"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Pieter Abbeel",
+    "scholar_id": "vtwH6GkAAAAJ",
+    "collaborator_name": "Sergey Levine",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 29,
+    "best_paper": {
+      "title": "Model-agnostic meta-learning for fast adaptation of deep networks",
+      "year": "2017",
+      "venue": "ICML 2017",
+      "original_venue": "International conference on machine learning, 1126-1135, 2017",
+      "citations": "15404"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Ashish Vaswani",
+    "scholar_id": "oR9sCGYAAAAJ",
+    "collaborator_name": "Ashish Vaswani",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 50,
+    "best_paper": {
+      "title": "Attention is all you need",
+      "year": "2017",
+      "venue": "NeurIPS 2017",
+      "original_venue": "Advances in neural information processing systems 30, 2017",
+      "citations": "179206"
+    },
+    "is_same_person": true,
+    "status": "success"
+  },
+  {
+    "name": "Alec Radford",
+    "scholar_id": "dOad5HoAAAAJ",
+    "collaborator_name": "Ilya Sutskever",
+    "collaborator_affiliation": "OpenAI",
+    "coauthored_papers": 20,
+    "best_paper": {
+      "title": "Language models are few-shot learners",
+      "year": "2020",
+      "venue": "NeurIPS 2020",
+      "original_venue": "Advances in neural information processing systems 33, 1877-1901, 2020",
+      "citations": "45917"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Kyunghyun Cho",
+    "scholar_id": "0RAmmIAAAAAJ",
+    "collaborator_name": "Yoshua Bengio",
+    "collaborator_affiliation": "ServiceNow (via Element AI acquisition)",
+    "coauthored_papers": 25,
+    "best_paper": {
+      "title": "Neural machine translation by jointly learning to align and translate",
+      "year": "2014",
+      "venue": "ICLR 2015",
+      "original_venue": "ICLR 2015, 2014",
+      "citations": "38986"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Niki Parmar",
+    "scholar_id": "q2YXPSgAAAAJ",
+    "collaborator_name": "Ashish Vaswani",
+    "collaborator_affiliation": "Google",
+    "coauthored_papers": 55,
+    "best_paper": {
+      "title": "Attention is all you need",
+      "year": "2017",
+      "venue": "NeurIPS 2017",
+      "original_venue": "Advances in neural information processing systems 30, 2017",
+      "citations": "179468"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Xiaoou Tang",
+    "scholar_id": "qpBtpGsAAAAJ",
+    "collaborator_name": "X Wang",
+    "collaborator_affiliation": "Oak Ridge National Laboratory (ORNL)",
+    "coauthored_papers": 36,
+    "best_paper": {
+      "title": "Deep learning face attributes in the wild",
+      "year": "2015",
+      "venue": "ICCV 2015",
+      "original_venue": "Proceedings of the IEEE international conference on computer vision, 3730-3738, 2015",
+      "citations": "10496"
+    },
+    "is_same_person": false,
+    "status": "success"
+  },
+  {
+    "name": "Llion Jones",
+    "scholar_id": "_3_P5VwAAAAJ",
+    "collaborator_name": "Ashish Vaswani",
+    "collaborator_affiliation": "Google Brain",
+    "coauthored_papers": 51,
+    "best_paper": {
+      "title": "Attention is all you need",
+      "year": "2017",
+      "venue": "NeurIPS 2017",
+      "original_venue": "Advances in neural information processing systems 30, 2017",
+      "citations": "178821"
+    },
+    "is_same_person": false,
+    "status": "success"
+  }
+]

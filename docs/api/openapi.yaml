@@ -1,0 +1,777 @@
+openapi: 3.0.3
+info:
+  title: DINQ API
+  version: 1.0.0
+  description: |
+    DINQ 单体服务 API 规范（覆盖统一入口与核心业务接口）。
+    分析相关统一入口：/api/analyze（旧的 jobs 接口已移除，统一使用 /api/analyze*）。
+    卡片字段与流式增量协议：见 docs/frontend/ANALYZE_CARDS.md
+servers:
+  - url: http://localhost:5001
+
+security:
+  - UserIdHeader: []
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    UserIdHeader:
+      type: apiKey
+      in: header
+      name: X-User-ID
+    BearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "missing source"
+        details:
+          type: object
+          additionalProperties: true
+      required: [success, error]
+    SuccessResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string, example: "ok" }
+        data:
+          type: object
+          additionalProperties: true
+    Pagination:
+      type: object
+      properties:
+        total: { type: integer, example: 120 }
+        limit: { type: integer, example: 20 }
+        offset: { type: integer, example: 0 }
+        has_more: { type: boolean, example: true }
+    JobPost:
+      type: object
+      properties:
+        id: { type: integer, example: 101 }
+        user_id: { type: string, example: "user_123" }
+        title: { type: string, example: "Research Engineer (LLM)" }
+        content: { type: string, example: "We are hiring..." }
+        post_type: { type: string, example: "job_offer" }
+        entity_type: { type: string, example: "company" }
+        location: { type: string, example: "San Francisco" }
+        company: { type: string, example: "DINQ" }
+        position: { type: string, example: "Research Engineer" }
+        salary_range: { type: string, example: "100k-160k" }
+        contact_info: { type: string, example: "jobs@example.com" }
+        tags:
+          type: array
+          items: { type: string }
+          example: ["llm", "research"]
+        is_active: { type: boolean, example: true }
+        view_count: { type: integer, example: 25 }
+        like_count: { type: integer, example: 3 }
+        bookmark_count: { type: integer, example: 1 }
+        created_at: { type: string, example: "2025-12-01T08:00:00" }
+        updated_at: { type: string, example: "2025-12-01T08:00:00" }
+    JobPostCreateRequest:
+      type: object
+      properties:
+        title: { type: string }
+        content: { type: string }
+        post_type: { type: string }
+        entity_type: { type: string }
+        location: { type: string }
+        company: { type: string }
+        position: { type: string }
+        salary_range: { type: string }
+        contact_info: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        display_name: { type: string }
+      required: [title, content]
+    JobPostListResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: object
+          properties:
+            posts:
+              type: array
+              items: { $ref: '#/components/schemas/JobPost' }
+            pagination:
+              $ref: '#/components/schemas/Pagination'
+    JobPostResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data: { $ref: '#/components/schemas/JobPost' }
+    InteractionResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string, example: "Post liked successfully" }
+        data:
+          type: object
+          properties:
+            post_id: { type: integer, example: 101 }
+            like_count: { type: integer, example: 4 }
+            is_liked: { type: boolean, example: true }
+            is_bookmarked: { type: boolean, example: false }
+            notes: { type: string, example: "follow up" }
+    AnalyzeRequest:
+      type: object
+      properties:
+        source:
+          type: string
+          description: scholar/github/linkedin/twitter/openreview/huggingface/youtube
+        mode:
+          type: string
+          enum: [async, sync]
+          default: async
+          description: When omitted, defaults to async (create job only).
+        input:
+          type: object
+          additionalProperties: true
+          description: |
+            Source-specific input payload.
+            Public contract recommendation: use `input.content` for all sources (id/url/name/free-form text).
+            Legacy per-source keys may still be accepted but should be considered deprecated.
+        cards:
+          type: array
+          items:
+            type: string
+          description: Optional. If omitted or empty array, use default card set for the source.
+        options:
+          type: object
+          additionalProperties: true
+          description: Optional. Supports `freeform=true` for "ambiguous input -> candidates -> user confirm" flow.
+      required: [source]
+      example:
+        source: scholar
+        mode: async
+        input:
+          content: "Y-ql3zMAAAAJ"
+        cards: ["profile", "metrics", "summary"]
+        options: {}
+    AnalyzeAsyncResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        job_id: { type: string }
+        status: { type: string }
+        cache_hit: { type: boolean, nullable: true }
+        cache_stale: { type: boolean, nullable: true }
+        refresh_in_progress: { type: boolean, nullable: true }
+        idempotent_replay: { type: boolean }
+      example:
+        success: true
+        job_id: "8b8f7c2a9f644f1f9e5b8a2e3a3b1c2d"
+        status: queued
+        cache_hit: false
+        cache_stale: false
+        refresh_in_progress: false
+        idempotent_replay: false
+    AnalyzeCandidate:
+      type: object
+      properties:
+        label: { type: string, example: "andrewng (GitHub)" }
+        input:
+          type: object
+          description: Canonical input payload for retry.
+          additionalProperties: true
+          example: { content: "andrewng" }
+        meta:
+          type: object
+          additionalProperties: true
+      required: [label, input]
+    AnalyzeNeedsConfirmationResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        needs_confirmation: { type: boolean }
+        source: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+        candidates:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyzeCandidate' }
+        message: { type: string, nullable: true }
+      required: [success, needs_confirmation, source, input, candidates]
+      example:
+        success: true
+        needs_confirmation: true
+        source: github
+        input: { content: "Andrew Ng" }
+        candidates:
+          - label: "andrewng (GitHub)"
+            input: { content: "andrewng" }
+            meta: {}
+    CardError:
+      type: object
+      properties:
+        card: { type: string, example: "summary" }
+        error: { type: string, example: "LLM timeout" }
+    AnalyzeSyncResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        job_id:
+          type: string
+        status:
+          type: string
+        cards:
+          type: object
+          additionalProperties: true
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/CardError' }
+      example:
+        success: true
+        job_id: "8b8f7c2a9f644f1f9e5b8a2e3a3b1c2d"
+        status: completed
+        cards:
+          profile: { data: { name: "Daiheng Gao", affiliation: "Independent" }, stream: {} }
+          summary: { data: { critical_evaluation: "..." }, stream: {} }
+        errors: []
+    CardOutput:
+      type: object
+      description: |
+        Unified card output envelope.
+        - data: final semantic payload (JSON object/string/etc)
+        - stream: accumulated incremental text keyed by field -> {format, sections}
+      properties:
+        data:
+          nullable: true
+          description: Final payload for the card (schema depends on card_type).
+        stream:
+          type: object
+          additionalProperties: true
+          description: Accumulated deltas for snapshot/UX.
+    JobCardSnapshot:
+      type: object
+      properties:
+        status: { type: string, example: "completed" }
+        internal: { type: boolean, example: false }
+        stream_spec:
+          type: object
+          nullable: true
+          description: Optional streaming spec for UI-friendly incremental rendering.
+          properties:
+            field: { type: string, example: "critical_evaluation" }
+            format: { type: string, example: "markdown" }
+            sections:
+              type: array
+              items: { type: string }
+              example: ["overview", "strengths", "risks", "questions"]
+        output: { $ref: '#/components/schemas/CardOutput' }
+    JobSnapshot:
+      type: object
+      properties:
+        success:
+          type: boolean
+        job:
+          type: object
+          properties:
+            job_id:
+              type: string
+            source:
+              type: string
+            status:
+              type: string
+            created_at:
+              type: string
+              example: "2025-12-01T08:00:00"
+            updated_at:
+              type: string
+              example: "2025-12-01T08:00:00"
+            last_seq:
+              type: integer
+              example: 12
+            next_after:
+              type: integer
+              example: 12
+            cards:
+              type: object
+              additionalProperties:
+                $ref: '#/components/schemas/JobCardSnapshot'
+      example:
+        success: true
+        job:
+          job_id: "8b8f7c2a9f644f1f9e5b8a2e3a3b1c2d"
+          source: "scholar"
+          status: "running"
+          created_at: "2025-12-01T08:00:00"
+          updated_at: "2025-12-01T08:01:00"
+          last_seq: 12
+          next_after: 12
+          cards:
+            profile:
+              status: completed
+              output: { data: { name: "Daiheng Gao" }, stream: {} }
+            summary:
+              status: running
+              output: { data: null, stream: {} }
+    SseEvent:
+      type: object
+      properties:
+        source: { type: string, example: "analysis" }
+        event_type: { type: string, example: "card.delta" }
+        message: { type: string, example: "" }
+        step: { type: string, example: "keepalive" }
+        progress: { type: number, example: 0 }
+        payload:
+          type: object
+          additionalProperties: true
+        type: { type: string, example: "ping" }
+        content: { type: string, example: "" }
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "ok" }
+
+  /api/analyze:
+    post:
+      summary: Unified analyze entry
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Optional. Safe retries without creating duplicate jobs (scoped to user_id).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzeRequest' }
+      responses:
+        '200':
+          description: Create job (mode=async) or return result (mode=sync)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/AnalyzeAsyncResponse' }
+                  - { $ref: '#/components/schemas/AnalyzeNeedsConfirmationResponse' }
+                  - { $ref: '#/components/schemas/AnalyzeSyncResponse' }
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/analyze/jobs/{job_id}:
+    get:
+      summary: Get job snapshot
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Job snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobSnapshot' }
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/analyze/jobs/{job_id}/stream:
+    get:
+      summary: Stream job events (SSE)
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: "data: {\"source\":\"analysis\",\"event_type\":\"card.delta\",\"payload\":{\"card\":\"summary\",\"delta\":\"...\"}}\n\n"
+
+  /api/stream:
+    post:
+      summary: Legacy scholar stream (SSE)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: "data: {\"source\":\"scholar\",\"event_type\":\"progress\",\"message\":\"Starting...\"}\n\n"
+
+  /api/scholar-pk:
+    post:
+      summary: Scholar PK (SSE)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                researcher1: { type: string }
+                researcher2: { type: string }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: "data: {\"source\":\"scholar\",\"event_type\":\"progress\",\"message\":\"Comparing...\"}\n\n"
+
+  /api/github/analyze:
+    get:
+      summary: GitHub analyze (GET)
+      parameters:
+        - in: query
+          name: username
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+    post:
+      summary: GitHub analyze (POST)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+      responses:
+        '200': { description: OK }
+
+  /api/github/analyze-stream:
+    post:
+      summary: GitHub analyze stream (SSE)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: "data: {\"source\":\"github\",\"event_type\":\"progress\",\"message\":\"Fetching...\"}\n\n"
+
+  /api/github/health:
+    get:
+      summary: GitHub health
+      responses:
+        '200': { description: OK }
+
+  /api/github/help:
+    get:
+      summary: GitHub help
+      responses:
+        '200': { description: OK }
+
+  /api/linkedin/analyze:
+    post:
+      summary: LinkedIn analyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200': { description: OK }
+
+  /api/huggingface/card/analyze:
+    post:
+      summary: HuggingFace card analyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+      responses:
+        '200': { description: OK }
+
+  /api/twitter/card/analyze:
+    post:
+      summary: Twitter card analyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+      responses:
+        '200': { description: OK }
+
+  /api/openreview/card/analyze:
+    post:
+      summary: OpenReview card analyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+      responses:
+        '200': { description: OK }
+
+  /api/youtube/analyze:
+    post:
+      summary: YouTube analyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel_id: { type: string }
+      responses:
+        '200': { description: OK }
+
+  /api/job-board/posts:
+    get:
+      summary: List job posts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobPostListResponse' }
+    post:
+      summary: Create job post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobPostCreateRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobPostResponse' }
+
+  /api/job-board/posts/{post_id}:
+    get:
+      summary: Get job post
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobPostResponse' }
+    put:
+      summary: Update job post
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobPostResponse' }
+    delete:
+      summary: Delete job post
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessResponse' }
+
+  /api/job-board/my-posts:
+    get:
+      summary: My job posts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobPostListResponse' }
+
+  /api/job-board/posts/{post_id}/like:
+    post:
+      summary: Like job post
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InteractionResponse' }
+    delete:
+      summary: Unlike job post
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InteractionResponse' }
+
+  /api/job-board/posts/{post_id}/bookmark:
+    post:
+      summary: Bookmark job post
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InteractionResponse' }
+    delete:
+      summary: Remove bookmark
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InteractionResponse' }
+
+  /api/job-board/posts/{post_id}/bookmark/notes:
+    put:
+      summary: Update bookmark notes
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InteractionResponse' }
+
+  /api/job-board/posts/{post_id}/status:
+    get:
+      summary: Interaction status
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InteractionResponse' }
+
+  /api/job-board/my-liked-posts:
+    get:
+      summary: My liked posts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobPostListResponse' }
+
+  /api/job-board/my-bookmarked-posts:
+    get:
+      summary: My bookmarked posts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobPostListResponse' }

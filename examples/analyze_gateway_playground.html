@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DINQ Analyze Playground (Gateway)</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #111a33;
+        --muted: #94a3b8;
+        --text: #e5e7eb;
+        --accent: #7c3aed;
+        --danger: #ef4444;
+        --ok: #22c55e;
+        --border: rgba(148, 163, 184, 0.18);
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+          "Segoe UI Emoji";
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        background: radial-gradient(1200px 600px at 10% 0%, rgba(124, 58, 237, 0.16), transparent 55%),
+          radial-gradient(900px 500px at 90% 10%, rgba(34, 197, 94, 0.12), transparent 55%),
+          var(--bg);
+        color: var(--text);
+      }
+      header {
+        padding: 20px 18px 10px;
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        background: rgba(11, 16, 32, 0.86);
+        backdrop-filter: blur(10px);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+      .sub {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 18px;
+        display: grid;
+        grid-template-columns: 420px 1fr;
+        gap: 16px;
+      }
+      .card {
+        background: linear-gradient(180deg, rgba(17, 26, 51, 0.86), rgba(17, 26, 51, 0.72));
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      .card .hd {
+        padding: 14px 14px 10px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      .card .hd .title {
+        font-weight: 700;
+        font-size: 13px;
+        letter-spacing: 0.2px;
+      }
+      .card .hd .hint {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .card .bd { padding: 14px; }
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      input, select, textarea {
+        width: 100%;
+        background: rgba(3, 6, 20, 0.45);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: var(--text);
+        padding: 10px 10px;
+        font-size: 13px;
+        outline: none;
+      }
+      textarea {
+        font-family: var(--mono);
+        min-height: 110px;
+        resize: vertical;
+        line-height: 1.35;
+      }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+      .mt { margin-top: 12px; }
+      .btns { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+      button {
+        border: 1px solid var(--border);
+        background: rgba(124, 58, 237, 0.18);
+        color: var(--text);
+        padding: 10px 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.primary { background: rgba(124, 58, 237, 0.35); border-color: rgba(124, 58, 237, 0.45); }
+      button.danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.45); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .pill {
+        font-family: var(--mono);
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      .status {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 14px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(148, 163, 184, 0.5); }
+      .dot.ok { background: var(--ok); }
+      .dot.bad { background: var(--danger); }
+      pre {
+        margin: 0;
+        padding: 14px;
+        background: rgba(3, 6, 20, 0.45);
+        border-top: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.35;
+        overflow: auto;
+        max-height: 520px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .kbd { font-family: var(--mono); font-size: 12px; color: var(--text); }
+      .small { font-size: 12px; color: var(--muted); }
+      .link { color: #c4b5fd; text-decoration: none; }
+      @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>DINQ Analyze Playground (Gateway)</h1>
+      <p class="sub">
+        用于本地/前端联调：直接调用 Gateway 的 3 个核心接口（create job / status / stream）。
+        <span class="kbd">SSE</span> 使用 <span class="kbd">fetch()</span> 读流（可带 <span class="kbd">Authorization</span>）。
+      </p>
+    </header>
+
+    <div class="wrap">
+      <section class="card">
+        <div class="hd">
+          <div class="title">请求配置</div>
+          <div class="hint">默认对接 api.dinq.me</div>
+        </div>
+        <div class="bd">
+          <div class="row">
+            <div>
+              <label>API Base</label>
+              <input id="apiBase" type="text" placeholder="https://api.dinq.me" />
+            </div>
+            <div>
+              <label>JWT Token（不含 Bearer）</label>
+              <input id="token" type="password" placeholder="eyJhbGciOi..." />
+            </div>
+          </div>
+
+          <div class="row mt">
+            <div>
+              <label>Source</label>
+              <select id="source">
+                <option value="scholar" selected>scholar</option>
+                <option value="github">github</option>
+                <option value="linkedin">linkedin</option>
+                <option value="twitter">twitter</option>
+                <option value="openreview">openreview</option>
+                <option value="huggingface">huggingface</option>
+                <option value="youtube">youtube</option>
+              </select>
+            </div>
+            <div>
+              <label>Mode</label>
+              <select id="mode">
+                <option value="async" selected>async</option>
+                <option value="sync">sync</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="mt">
+            <label>input（JSON）</label>
+            <textarea id="inputJson">{}</textarea>
+            <div class="small mt">
+              示例：scholar 可用 <span class="kbd">{"content":"Y-ql3zMAAAAJ"}</span>
+            </div>
+          </div>
+
+            <div class="row mt">
+            <div>
+              <label>cards（JSON，可选）</label>
+              <textarea id="cardsJson">["profile","metrics","summary"]</textarea>
+            </div>
+            <div>
+              <label>options（JSON，可选，预留）</label>
+              <textarea id="optionsJson">{}</textarea>
+            </div>
+          </div>
+
+          <div class="row mt">
+            <div>
+              <label>job_id</label>
+              <input id="jobId" type="text" placeholder="create 后自动填充" />
+            </div>
+            <div>
+              <label>after（seq）</label>
+              <input id="afterSeq" type="number" value="0" min="0" step="1" />
+            </div>
+          </div>
+
+          <div class="btns">
+            <button class="primary" id="btnCreate">Create Job</button>
+            <button id="btnStatus">Get Status</button>
+            <button id="btnStream">Stream (Replay)</button>
+            <button class="danger" id="btnStop" disabled>Stop Stream</button>
+          </div>
+
+          <div class="small mt">
+            建议本地启动方式：在 <span class="kbd">dinq/examples</span> 目录执行
+            <span class="kbd">python3 -m http.server 5173</span>，然后打开
+            <a class="link" href="http://localhost:5173/analyze_gateway_playground.html" target="_blank" rel="noreferrer">
+              http://localhost:5173/analyze_gateway_playground.html
+            </a>
+          </div>
+        </div>
+        <div class="status">
+          <div id="dot" class="dot"></div>
+          <div id="statusText">idle</div>
+          <span id="lastSeq" class="pill">seq: -</span>
+          <span id="lastJob" class="pill">job: -</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="hd">
+          <div class="title">输出</div>
+          <div class="hint">只展示关键信息（可复制）</div>
+        </div>
+        <pre id="out"></pre>
+      </section>
+    </div>
+
+    <script type="module">
+      const els = {
+        apiBase: document.getElementById("apiBase"),
+        token: document.getElementById("token"),
+        source: document.getElementById("source"),
+        mode: document.getElementById("mode"),
+        inputJson: document.getElementById("inputJson"),
+        cardsJson: document.getElementById("cardsJson"),
+        optionsJson: document.getElementById("optionsJson"),
+        jobId: document.getElementById("jobId"),
+        afterSeq: document.getElementById("afterSeq"),
+        btnCreate: document.getElementById("btnCreate"),
+        btnStatus: document.getElementById("btnStatus"),
+        btnStream: document.getElementById("btnStream"),
+        btnStop: document.getElementById("btnStop"),
+        out: document.getElementById("out"),
+        dot: document.getElementById("dot"),
+        statusText: document.getElementById("statusText"),
+        lastSeq: document.getElementById("lastSeq"),
+        lastJob: document.getElementById("lastJob"),
+      };
+
+      const LS = {
+        apiBase: "dinq.playground.apiBase",
+        token: "dinq.playground.token",
+      };
+
+      function now() {
+        return new Date().toISOString().slice(11, 19);
+      }
+
+      function log(line) {
+        const text = `[${now()}] ${line}\n`;
+        els.out.textContent += text;
+        els.out.scrollTop = els.out.scrollHeight;
+      }
+
+      function setStatus(kind, text) {
+        els.statusText.textContent = text;
+        els.dot.className = "dot";
+        if (kind === "ok") els.dot.classList.add("ok");
+        if (kind === "bad") els.dot.classList.add("bad");
+      }
+
+      function jsonParseOrThrow(label, text, fallback) {
+        const raw = (text ?? "").trim();
+        if (!raw) return fallback;
+        try {
+          return JSON.parse(raw);
+        } catch (e) {
+          throw new Error(`${label} JSON 解析失败：${e?.message ?? e}`);
+        }
+      }
+
+      function authHeaderValue() {
+        const raw = (els.token.value || "").trim();
+        if (!raw) throw new Error("缺少 token（JWT）");
+        return raw.startsWith("Bearer ") ? raw : `Bearer ${raw}`;
+      }
+
+      function apiBase() {
+        const base = (els.apiBase.value || "").trim().replace(/\/+$/, "");
+        if (!base) return "https://api.dinq.me";
+        return base;
+      }
+
+      function urlJoin(base, path) {
+        return `${base}${path.startsWith("/") ? "" : "/"}${path}`;
+      }
+
+      async function readError(resp) {
+        const text = await resp.text();
+        try {
+          const obj = JSON.parse(text);
+          return obj?.error ? `${obj.error}` : text;
+        } catch {
+          return text || `HTTP ${resp.status}`;
+        }
+      }
+
+      function createSSEParser(onEvent) {
+        let buffer = "";
+        return (chunkText) => {
+          buffer += chunkText;
+          while (true) {
+            const idx = buffer.indexOf("\n\n");
+            if (idx === -1) break;
+            const frame = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            for (const line of frame.split("\n")) {
+              const t = line.trim();
+              if (!t.startsWith("data:")) continue;
+              const jsonText = t.slice("data:".length).trim();
+              if (!jsonText) continue;
+              try {
+                onEvent(JSON.parse(jsonText));
+              } catch {
+                // ignore malformed frame
+              }
+            }
+          }
+        };
+      }
+
+      async function fetchSSE(url, init, onEvent) {
+        const resp = await fetch(url, init);
+        if (!resp.ok) throw new Error(await readError(resp));
+        if (!resp.body) throw new Error("No response body");
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        const parse = createSSEParser(onEvent);
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          parse(decoder.decode(value, { stream: true }));
+        }
+      }
+
+      let activeAbort = null;
+      function stopStream() {
+        if (activeAbort) activeAbort.abort();
+        activeAbort = null;
+        els.btnStop.disabled = true;
+        setStatus("ok", "stopped");
+      }
+
+      async function createJob() {
+        stopStream();
+        setStatus("ok", "creating...");
+        els.out.textContent = "";
+
+        const payload = {
+          source: (els.source.value || "scholar").trim(),
+          mode: (els.mode.value || "async").trim(),
+          input: jsonParseOrThrow("input", els.inputJson.value, {}),
+          options: jsonParseOrThrow("options", els.optionsJson.value, {}),
+        };
+
+        const cardsRaw = (els.cardsJson.value || "").trim();
+        if (cardsRaw) payload.cards = jsonParseOrThrow("cards", cardsRaw, []);
+
+        const base = apiBase();
+        const url = urlJoin(base, "/api/v1/analyze");
+        const headers = {
+          "Authorization": authHeaderValue(),
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        };
+
+        const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+        if (!resp.ok) throw new Error(await readError(resp));
+        const data = await resp.json();
+
+        els.jobId.value = data.job_id || "";
+        els.lastJob.textContent = `job: ${data.job_id || "-"}`;
+        els.lastSeq.textContent = "seq: -";
+        els.afterSeq.value = "0";
+
+        log(`create(${payload.mode}) ok: job_id=${data.job_id}, status=${data.status}`);
+        log(JSON.stringify(data, null, 2));
+        setStatus("ok", `create(${payload.mode}) ok`);
+      }
+
+      async function getStatus() {
+        stopStream();
+        setStatus("ok", "fetching status...");
+
+        const jobId = (els.jobId.value || "").trim();
+        if (!jobId) throw new Error("缺少 job_id");
+
+        const base = apiBase();
+        const url = urlJoin(base, `/api/v1/analyze/jobs/${encodeURIComponent(jobId)}`);
+        const resp = await fetch(url, { headers: { "Authorization": authHeaderValue() } });
+        if (!resp.ok) throw new Error(await readError(resp));
+        const data = await resp.json();
+        log(`status ok: ${jobId}`);
+        log(JSON.stringify(data, null, 2));
+        setStatus("ok", "status ok");
+      }
+
+      async function replayStream() {
+        stopStream();
+        setStatus("ok", "streaming...");
+
+        const jobId = (els.jobId.value || "").trim();
+        if (!jobId) throw new Error("缺少 job_id");
+        const after = Number(els.afterSeq.value || "0") || 0;
+
+        const base = apiBase();
+        const url = urlJoin(base, `/api/v1/analyze/jobs/${encodeURIComponent(jobId)}/stream?after=${after}`);
+
+        const ac = new AbortController();
+        activeAbort = ac;
+        els.btnStop.disabled = false;
+
+        const onEvent = (evt) => {
+          const payload = evt?.payload || {};
+          const seq = payload.seq ?? evt?.seq;
+          if (typeof seq === "number") {
+            els.lastSeq.textContent = `seq: ${seq}`;
+            els.afterSeq.value = String(seq);
+          }
+          log(`sse: ${evt?.event_type ?? "?"} (seq=${seq ?? "-"})`);
+          if (evt?.event_type === "job.completed" || evt?.event_type === "job.failed") {
+            log("job finished; auto stop stream");
+            stopStream();
+          }
+        };
+
+        log(`GET ${url}`);
+        await fetchSSE(url, { headers: { "Authorization": authHeaderValue(), "Accept": "text/event-stream" }, signal: ac.signal }, onEvent);
+      }
+
+      function loadPrefs() {
+        els.apiBase.value = localStorage.getItem(LS.apiBase) || "https://api.dinq.me";
+        const saved = localStorage.getItem(LS.token);
+        if (saved) els.token.value = saved;
+      }
+
+      function savePrefs() {
+        localStorage.setItem(LS.apiBase, els.apiBase.value || "");
+        // token is sensitive; store only if user filled it (still local-only).
+        if ((els.token.value || "").trim()) localStorage.setItem(LS.token, els.token.value.trim());
+      }
+
+      els.apiBase.addEventListener("change", savePrefs);
+      els.token.addEventListener("change", savePrefs);
+      els.btnStop.addEventListener("click", stopStream);
+
+      els.btnCreate.addEventListener("click", async () => {
+        try {
+          savePrefs();
+          await createJob();
+        } catch (e) {
+          setStatus("bad", "error");
+          log(`ERROR: ${e?.message ?? e}`);
+        }
+      });
+
+      els.btnStatus.addEventListener("click", async () => {
+        try {
+          savePrefs();
+          await getStatus();
+        } catch (e) {
+          setStatus("bad", "error");
+          log(`ERROR: ${e?.message ?? e}`);
+        }
+      });
+
+      els.btnStream.addEventListener("click", async () => {
+        try {
+          savePrefs();
+          await replayStream();
+        } catch (e) {
+          setStatus("bad", "error");
+          log(`ERROR: ${e?.message ?? e}`);
+        }
+      });
+
+      loadPrefs();
+      setStatus("ok", "ready");
+      log("ready.");
+    </script>
+  </body>
+</html>

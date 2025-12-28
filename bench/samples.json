@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "defaults": {
+    "mode": "both",
+    "timeout_s": 1800,
+    "user_id": "local_test"
+  },
+  "cases": [
+    {
+      "name": "github_light_nehanarkhede",
+      "source": "github",
+      "content": "nehanarkhede",
+      "tags": ["github", "light"]
+    },
+    {
+      "name": "github_heavy_mdo",
+      "source": "github",
+      "content": "mdo",
+      "tags": ["github", "heavy"]
+    },
+    {
+      "name": "linkedin_public_lindsay_scott",
+      "source": "linkedin",
+      "content": "https://ca.linkedin.com/in/lindsay-scott-2ab8951",
+      "tags": ["linkedin", "public"]
+    },
+    {
+      "name": "scholar_id_1zmDOdwAAAAJ",
+      "source": "scholar",
+      "content": "1zmDOdwAAAAJ",
+      "tags": ["scholar", "id"]
+    }
+  ]
+}
