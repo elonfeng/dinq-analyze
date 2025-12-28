@@ -34,9 +34,9 @@ nano .env
 填入你的 API 密钥：
 
 ```env
-GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
-OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
-CRAWLBASE_TOKEN=xxxxxxxxxxxxxxxxxxxx
+GITHUB_TOKEN=ghp_<YOUR_TOKEN>
+OPENROUTER_API_KEY=sk-or-v1-<YOUR_KEY>
+CRAWLBASE_TOKEN=<YOUR_TOKEN>
 ```
 
 ### 4. 启动服务

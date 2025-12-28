@@ -32,9 +32,12 @@ class DatabaseConfig:
         
     def get_supabase_config(self) -> Dict[str, Any]:
         """获取Supabase PostgreSQL配置"""
+        # NOTE: Do NOT hardcode any real production DB URLs or passwords in the repo.
+        # Prefer injecting via env (DINQ_DB_URL / DATABASE_URL / DB_URL).
+        db_url = os.getenv("DINQ_DB_URL") or os.getenv("DATABASE_URL") or os.getenv("DB_URL") or ""
         return {
             'name': 'Supabase PostgreSQL',
-            'url': f"postgresql+psycopg2://postgres:DINQ123321!qwe@db.kqfpikinqkcujlzrsaad.supabase.co:5432/postgres?sslmode=require",
+            'url': db_url or "postgresql+psycopg2://postgres:<PASSWORD>@<HOST>:5432/postgres?sslmode=require",
             'connect_args': {
                 "sslmode": "require",
                 "connect_timeout": 30,

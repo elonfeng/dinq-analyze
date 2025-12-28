@@ -27,12 +27,14 @@ build/
 # Environment variables
 .env
 .env.local
+.env.production
 .env.development.local
 .env.test.local
 .env.production.local
 
 # Secrets
 server/secrets/
+firebase-adminsdk.json
 *.json.key
 *.pem
 
@@ -107,6 +109,9 @@ dashboard/package-lock.json
 blog_web/package-lock.json
 blog_web/node_modules/
 blog_web/build/
+# Not part of dinq-analyze (analysis service only)
+blog_web/
+dashboard/
 # Test results
 tests/scholar_tests/results/
 tests/scholar_tests/results/**

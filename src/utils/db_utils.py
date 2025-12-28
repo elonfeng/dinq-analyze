@@ -20,10 +20,7 @@ from src.models.db import Base, Scholar
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('db_utils')
 
-_DEFAULT_SUPABASE_DB_URL = (
-    "postgresql+psycopg2://postgres:DINQ123321!qwe@db.kqfpikinqkcujlzrsaad.supabase.co:5432/postgres"
-    "?sslmode=require"
-)
+_DEFAULT_DB_URL = "sqlite:///./dinq.db"
 
 
 def _get_db_url() -> str:
@@ -33,13 +30,13 @@ def _get_db_url() -> str:
     优先级：
       1) DINQ_DB_URL
       2) DATABASE_URL / DB_URL
-      3) 代码内默认（历史兼容，不推荐）
+      3) 代码内默认（仅本地 SQLite；不包含任何线上/密钥信息）
     """
     return (
         os.getenv("DINQ_DB_URL")
         or os.getenv("DATABASE_URL")
         or os.getenv("DB_URL")
-        or _DEFAULT_SUPABASE_DB_URL
+        or _DEFAULT_DB_URL
     )
 
 
