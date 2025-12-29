@@ -1463,7 +1463,7 @@ def get_job(job_id: str):
             "output": output_env,
             **({"stream_spec": stream_spec} if stream_spec else {}),
         }
-    return jsonify(
+    resp = jsonify(
         {
             "success": True,
             "job": {
@@ -1474,13 +1474,13 @@ def get_job(job_id: str):
                 "updated_at": job.updated_at,
                 "last_seq": last_seq,
                 "next_after": last_seq,
-                "cards": {
-                    c.card_type: _card_snapshot(c)
-                    for c in cards
-                },
+                "cards": {c.card_type: _card_snapshot(c) for c in cards},
             },
         }
     )
+    # Avoid serving stale snapshots via intermediary/browser caching.
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @analyze_bp.route("/analyze/jobs/<job_id>/stream", methods=["GET", "OPTIONS"])

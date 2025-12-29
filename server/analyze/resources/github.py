@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
@@ -20,6 +21,63 @@ from server.utils.timing import elapsed_ms, now_perf
 
 
 ProgressFn = Callable[[str, str, Optional[Dict[str, Any]]], None]
+
+
+_LEVEL_RE = re.compile(r"^L\\s*(\\d{1,2})$", flags=re.IGNORECASE)
+
+
+def _coerce_level(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    compact = raw.replace(" ", "").strip()
+    m = _LEVEL_RE.match(compact)
+    if m:
+        try:
+            n = int(m.group(1))
+        except Exception:
+            return ""
+        return f"L{n}"
+
+    lowered = raw.lower()
+    # Best-effort map from descriptive labels to the internal L-level scale.
+    if "distinguished" in lowered or "fellow" in lowered:
+        return "L8"
+    if "principal" in lowered or "director" in lowered:
+        return "L7"
+    if "staff" in lowered:
+        return "L6"
+    if "senior" in lowered:
+        return "L5"
+    if "mid" in lowered or "intermediate" in lowered:
+        return "L4"
+    if "junior" in lowered or "entry" in lowered or "intern" in lowered:
+        return "L3"
+    return ""
+
+
+def _coerce_industry_ranking(value: Any) -> Optional[float]:
+    """
+    Normalize industry_ranking into a 0..1 percentile float.
+
+    Accepts:
+      - 0.25 (top 25%)
+      - 25 (mistaken 25%)
+    """
+
+    try:
+        if value is None:
+            return None
+        v = float(value)
+    except Exception:
+        return None
+
+    if 1.0 < v <= 100.0:
+        v = v / 100.0
+
+    if not (0.0 < v <= 1.0):
+        return None
+    return float(v)
 
 
 def _rest_profile(*, login: str, token: str, timeout_s: float) -> Optional[Dict[str, Any]]:
@@ -937,7 +995,13 @@ def run_github_enrich_bundle(
         "description, valuation_and_level, role_model, roast, most_valuable_pull_request, feature_project_tags.\n\n"
         "Rules:\n"
         "- description: 1-2 sentences.\n"
-        "- valuation_and_level must include: level (non-empty), salary_range, total_compensation, reasoning.\n"
+        "- valuation_and_level must include:\n"
+        "  - level: one of L3/L4/L5/L6/L7/L8\n"
+        "  - salary_range: string range in USD (e.g. \"$190k-$320k\")\n"
+        "  - total_compensation: string range in USD (e.g. \"$240k-$480k\")\n"
+        "  - industry_ranking: float in (0,1] representing percentile (0.05 = top 5%)\n"
+        "  - growth_potential: one of High/Medium/Low\n"
+        "  - reasoning: 1-2 sentences\n"
         "- role_model must be an object with: name, github (optional), similarity_score (0-1), reason.\n"
         "- roast: 1 short paragraph (keep it playful but not offensive).\n"
         "- most_valuable_pull_request must be an object with: repository, url, title, additions, deletions, reason, impact.\n"
@@ -1025,7 +1089,7 @@ def run_github_enrich_bundle(
             desc = f"{login}: GitHub profile summary."
 
     valuation = payload.get("valuation_and_level") if isinstance(payload.get("valuation_and_level"), dict) else {}
-    level = str(valuation.get("level") or "").strip()
+    level = _coerce_level(valuation.get("level"))
     if not level:
         overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
         try:
@@ -1049,6 +1113,38 @@ def run_github_enrich_bundle(
         valuation["salary_range"] = valuation.get("salary_range") or salary
         valuation["total_compensation"] = valuation.get("total_compensation") or tc
         valuation["reasoning"] = valuation.get("reasoning") or "Fallback estimate based on GitHub tenure + contribution signals."
+        level = fallback_level
+    else:
+        valuation["level"] = level
+
+    # Ensure Industry Ranking exists (frontend expects a 0..1 float).
+    industry_ranking = _coerce_industry_ranking(valuation.get("industry_ranking"))
+    if industry_ranking is None:
+        # Coarse fallback tuned for UX (not compensation accuracy).
+        if level in ("L6", "L7", "L8"):
+            industry_ranking = 0.25
+        elif level == "L5":
+            industry_ranking = 0.35
+        else:
+            industry_ranking = 0.5
+    valuation["industry_ranking"] = industry_ranking
+
+    # Ensure Growth Potential exists.
+    growth = str(valuation.get("growth_potential") or "").strip()
+    if not growth:
+        stars = 0
+        overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
+        try:
+            stars = int(overview.get("stars") or 0)
+        except Exception:
+            stars = 0
+        if stars >= 5000 or pr_total >= 1000 or level in ("L7", "L8"):
+            growth = "High"
+        elif stars >= 500 or pr_total >= 200 or level in ("L5", "L6"):
+            growth = "Medium"
+        else:
+            growth = "Low"
+    valuation["growth_potential"] = growth
 
     role_model = payload.get("role_model") if isinstance(payload.get("role_model"), dict) else {}
     if not role_model:

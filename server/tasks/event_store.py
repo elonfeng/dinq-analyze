@@ -213,6 +213,19 @@ class EventStore:
         payload: Optional[Dict[str, Any]] = None,
     ) -> AnalysisJobEvent:
         payload = payload or {}
+
+        # Backward/ergonomic compat: expose {data, stream} alongside the nested `payload.payload`
+        # envelope for card lifecycle events. This keeps the canonical structure intact while
+        # making frontend parsing more forgiving.
+        if event_type in ("card.completed", "card.prefill") and isinstance(payload, dict):
+            inner = payload.get("payload")
+            if inner is not None:
+                try:
+                    env = ensure_output_envelope(inner)
+                    payload.setdefault("data", env.get("data"))
+                    payload.setdefault("stream", env.get("stream"))
+                except Exception:
+                    pass
         lock = self._lock_for_job(job_id)
         with lock:
             with get_db_session() as session:
