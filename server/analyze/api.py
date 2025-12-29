@@ -1002,7 +1002,24 @@ def analyze():
     # Cache-hit direct response (no DB writes): return cards immediately.
     # This keeps create() fast even when Postgres is high RTT, and avoids the slow "complete job from cache"
     # DB write path.
-    if mode == "async" and cache_hit_payload is not None and _cache_hit_direct_response_enabled():
+    if mode == "async" and cache_hit_payload is not None and _cache_hit_direct_response_enabled() and not idempotency_key:
+        job_id = uuid.uuid4().hex
+        fut = _get_async_create_executor().submit(
+            _background_create_job_bundle,
+            job_id=job_id,
+            user_id=user_id,
+            source=source,
+            normalized_input=dict(normalized_input or {}),
+            requested_cards=list(requested_cards) if requested_cards else None,
+            options=dict(options or {}),
+            subject_key=subject_key or None,
+            initial_ready=False,
+            cache_hit_payload=dict(cache_hit_payload) if isinstance(cache_hit_payload, dict) else None,
+            cache_hit_cached_at_iso=cache_hit_cached_at_iso,
+            cache_hit_stale=bool(cache_hit_stale),
+        )
+        fut.add_done_callback(lambda f: _log_future_exception("async_create_job_bundle_cache_hit", f))
+
         cards_out = _build_cards_from_final_cache_payload(
             source=source,
             final_payload=cache_hit_payload,
@@ -1011,12 +1028,12 @@ def analyze():
         return jsonify(
             {
                 "success": True,
-                "job_id": uuid.uuid4().hex,
+                "job_id": job_id,
                 "status": "completed",
                 "cache_hit": True,
                 "cache_stale": bool(cache_hit_stale),
                 "cache_source": cache_hit_source,
-                "ephemeral_job": True,
+                "async_create": True,
                 "cards": cards_out,
                 "errors": [],
                 "idempotent_replay": False,
@@ -1154,6 +1171,23 @@ def get_job(job_id: str):
 
     use_redis = _event_store.redis_enabled()
     rec = _job_store.get_job_with_cards(job_id, include_output=(not use_redis))
+    if rec is None and _async_create_job_enabled():
+        wait_s_raw = os.getenv("DINQ_ANALYZE_JOB_WAIT_FOR_CREATE_SECONDS") or os.getenv("DINQ_ANALYZE_STREAM_WAIT_FOR_JOB_SECONDS") or "10"
+        poll_s_raw = os.getenv("DINQ_ANALYZE_JOB_WAIT_FOR_CREATE_POLL_SECONDS") or os.getenv("DINQ_ANALYZE_STREAM_WAIT_FOR_JOB_POLL_SECONDS") or "0.15"
+        try:
+            wait_s = float(wait_s_raw or "10")
+        except Exception:
+            wait_s = 10.0
+        try:
+            poll_s = float(poll_s_raw or "0.15")
+        except Exception:
+            poll_s = 0.15
+        poll_s = max(0.05, min(poll_s, 2.0))
+
+        deadline = time.monotonic() + max(0.0, wait_s)
+        while rec is None and time.monotonic() < deadline:
+            time.sleep(poll_s)
+            rec = _job_store.get_job_with_cards(job_id, include_output=(not use_redis))
     if rec is None:
         return jsonify({"success": False, "error": "job not found"}), 404
 
