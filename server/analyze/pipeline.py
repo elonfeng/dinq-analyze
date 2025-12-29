@@ -1772,9 +1772,23 @@ class PipelineExecutor:
                         level = dict(level_art.payload or {})
 
                         if ct == "estimatedSalary":
+                            earnings_usd = _parse_usd(level.get("earnings"))
+                            # Robust fallback: some level providers return qualitative/empty `earnings` strings.
+                            # The frontend needs a numeric earningsPerYearUSD to render the card consistently.
+                            if earnings_usd is None or int(earnings_usd or 0) <= 0 or int(earnings_usd or 0) < 10_000:
+                                lvl = str(level.get("level_us") or "").strip().upper()
+                                by_level = {
+                                    "L3": 150_000,
+                                    "L4": 220_000,
+                                    "L5": 310_000,
+                                    "L6": 440_000,
+                                    "L7": 640_000,
+                                    "L8": 905_000,
+                                }
+                                earnings_usd = int(by_level.get(lvl) or 300_000)
                             out = {
                                 "blockTitle": "Estimated Salary",
-                                "earningsPerYearUSD": _parse_usd(level.get("earnings")),
+                                "earningsPerYearUSD": int(earnings_usd) if earnings_usd is not None else None,
                                 "levelEquivalency": {"us": level.get("level_us"), "cn": level.get("level_cn")},
                                 "reasoning": level.get("justification"),
                             }

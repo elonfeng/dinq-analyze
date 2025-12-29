@@ -529,21 +529,43 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     emit("ai_bundle", "Generating fused LinkedIn enrich bundle...", {"timeout_seconds": timeout_s})
     t0 = now_perf()
     out: Any = None
+    from server.config.llm_models import get_model
+
+    model = get_model("fast", task="linkedin_enrich_bundle")
+    primary_timeout = min(float(timeout_s), 3.0) if str(model).strip().lower().startswith("groq:") else float(timeout_s)
     try:
         out = openrouter_chat(
             task="linkedin_enrich_bundle",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            model=model,
             temperature=0.3,
             max_tokens=1400,
             expect_json=True,
             stream=False,
             cache=False,
-            timeout_seconds=timeout_s,
+            timeout_seconds=primary_timeout,
         )
     except requests.exceptions.Timeout:
         out = None
     except Exception:
         out = None
+
+    # Fallback: if Groq is rate-limited or returns invalid JSON, retry once on a stable OpenRouter model.
+    if not isinstance(out, dict) or not out:
+        try:
+            out = openrouter_chat(
+                task="linkedin_enrich_bundle",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                model="google/gemini-2.5-flash",
+                temperature=0.3,
+                max_tokens=1400,
+                expect_json=True,
+                stream=False,
+                cache=False,
+                timeout_seconds=float(timeout_s),
+            )
+        except Exception:
+            out = None
     emit("timing.linkedin.enrich_bundle", "LinkedIn enrich bundle completed", {"duration_ms": elapsed_ms(t0)})
 
     payload = out if isinstance(out, dict) else {}
