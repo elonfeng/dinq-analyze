@@ -35,6 +35,8 @@ DEFAULT_MODEL = get_default_model()
 _BUILTIN_TASK_ROUTES: dict[str, str] = {
     # Tail-latency killers (Groq primary + Gemini Flash hedge).
     "linkedin_roast": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
+    # Strict JSON bundles: Groq primary + Gemini Flash hedge for schema stability.
+    "linkedin_enrich_bundle": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
     "researcher_evaluation": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
 }
 

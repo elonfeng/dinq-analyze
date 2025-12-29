@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import requests
 
 from server.utils.timing import elapsed_ms, now_perf
-from server.config.llm_models import get_model
 from server.llm.gateway import openrouter_chat
 
 
@@ -529,7 +528,6 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         out = openrouter_chat(
             task="linkedin_enrich_bundle",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            model=get_model("fast", task="linkedin_enrich_bundle"),
             temperature=0.3,
             max_tokens=1400,
             expect_json=True,
