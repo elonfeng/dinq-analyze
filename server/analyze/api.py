@@ -1235,11 +1235,38 @@ def analyze():
             except Exception:
                 pass
 
-    # Cache-hit direct response (no DB writes): return cards immediately.
-    # This keeps create() fast even when Postgres is high RTT, and avoids the slow "complete job from cache"
-    # DB write path.
-    if mode == "async" and cache_hit_payload is not None and _cache_hit_direct_response_enabled() and not idempotency_key:
+    # Cache-hit direct response (fast path): return cards immediately.
+    #
+    # IMPORTANT: even on cache-hit, we MUST create a real job bundle in the jobs DB so that
+    # `/jobs/<job_id>` and `/jobs/<job_id>/stream` work consistently (frontend always navigates by job_id).
+    # When async-create is enabled, we create the bundle in background to keep create() fast.
+    if (
+        mode == "async"
+        and cache_hit_payload is not None
+        and _cache_hit_direct_response_enabled()
+        and _async_create_job_enabled()
+        and not idempotency_key
+    ):
         job_id = uuid.uuid4().hex
+        fut = _get_async_create_executor().submit(
+            _background_create_job_bundle,
+            job_id=job_id,
+            user_id=user_id,
+            source=source,
+            normalized_input=dict(normalized_input or {}),
+            requested_cards=list(requested_cards) if requested_cards else None,
+            options=dict(options or {}),
+            subject_key=subject_key or None,
+            initial_ready=False,
+            cache_hit_payload=dict(cache_hit_payload) if isinstance(cache_hit_payload, dict) else None,
+            cache_hit_cached_at_iso=cache_hit_cached_at_iso,
+            cache_hit_stale=bool(cache_hit_stale),
+        )
+        fut.add_done_callback(lambda f: _log_future_exception("async_create_job_bundle_cache_hit", f))
+
+        if api_should_start_scheduler():
+            init_scheduler()
+
         cards_out = _build_cards_from_final_cache_payload(
             source=source,
             final_payload=cache_hit_payload,
@@ -1255,8 +1282,7 @@ def analyze():
                 "cache_hit": True,
                 "cache_stale": bool(cache_hit_stale),
                 "cache_source": cache_hit_source,
-                # Speed-first: cache-hit does not require a persisted job bundle.
-                "async_create": False,
+                "async_create": True,
                 "cards": cards_out,
                 "errors": [],
                 "idempotent_replay": False,
