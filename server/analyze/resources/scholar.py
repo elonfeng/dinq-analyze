@@ -310,13 +310,23 @@ def estimate_scholar_level_fast(
         merged[k] = v
 
     # Ensure earnings is always parseable.
-    earnings = str(merged.get("earnings") or "").strip()
-    if not earnings or earnings.lower() in ("n/a", "na", "unknown", "none"):
-        merged["earnings"] = base.get("earnings")
-    else:
-        # Some models return qualitative text ("competitive") which breaks downstream USD parsing.
-        if not any(ch.isdigit() for ch in earnings):
+    earnings_val = merged.get("earnings")
+    if isinstance(earnings_val, bool):
+        earnings_val = None
+    if isinstance(earnings_val, (int, float)) and earnings_val is not None:
+        if int(earnings_val) <= 0:
             merged["earnings"] = base.get("earnings")
+    elif isinstance(earnings_val, str):
+        earnings = earnings_val.strip()
+        if not earnings or earnings.lower() in ("n/a", "na", "unknown", "none"):
+            merged["earnings"] = base.get("earnings")
+        else:
+            # Some models return qualitative text ("competitive") which breaks downstream USD parsing.
+            if not any(ch.isdigit() for ch in earnings):
+                merged["earnings"] = base.get("earnings")
+    else:
+        # Reject non-scalar earnings (dict/list/etc) to keep downstream formatting stable.
+        merged["earnings"] = base.get("earnings")
 
     def _norm_level_us(raw: Any, fallback: Any) -> Any:
         s = str(raw or "").strip().upper().replace(" ", "")
