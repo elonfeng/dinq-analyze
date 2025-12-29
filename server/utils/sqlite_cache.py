@@ -1,7 +1,7 @@
 """
 SQLite local cache (L1).
 
-This is used as a fast, single-machine cache to avoid a Redis dependency.
+This is used as a fast, single-machine cache without requiring any external cache service.
 
 Notes:
 - Designed for small/medium JSON blobs (final results / full_report snapshots).
@@ -179,4 +179,3 @@ def get_sqlite_cache() -> Optional[SqliteCache]:
         path = (os.getenv("DINQ_SQLITE_CACHE_PATH") or "").strip() or _default_cache_path()
         _CACHE_SINGLETON = SqliteCache(path)
         return _CACHE_SINGLETON
-

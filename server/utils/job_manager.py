@@ -8,7 +8,7 @@ Job Manager (in-process)
 
 说明：
 - 这是“单进程”实现：进程重启后 job 会丢失；适用于本地/单实例部署。
-- 需要跨进程全局队列/限流时，可后续替换为 Redis/Celery 等。
+- 需要跨进程全局队列/限流时，可后续替换为分布式队列/调度系统。
 """
 
 from __future__ import annotations

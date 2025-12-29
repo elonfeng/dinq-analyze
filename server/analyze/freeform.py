@@ -18,7 +18,7 @@ import requests
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from src.models.db import AnalysisArtifactCache
-from src.utils.db_utils import get_db_session
+from src.utils.db_utils import get_cache_db_session
 
 _GITHUB_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$")
 # Scholar user IDs typically end with "AAAAJ" (sometimes "AAAAAJ").
@@ -129,7 +129,7 @@ def _freeform_cache_get_candidates(cache_key: str) -> Optional[List[Dict[str, An
         return None
 
     try:
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             rec = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == cache_key).first()
             if rec is None:
                 return None
@@ -167,7 +167,7 @@ def _freeform_cache_maybe_set(cache_key: str, candidates: List[Dict[str, Any]]) 
     expires_at = now + timedelta(seconds=ttl)
 
     try:
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             rec = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == cache_key).first()
             if rec is None:
                 rec = AnalysisArtifactCache(

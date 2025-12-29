@@ -6,7 +6,7 @@
 - 统一入口：`/api/analyze` 统一承载 Scholar / GitHub / LinkedIn 等分析
 - 卡片化输出：每个功能输出为 card，可独立执行/重试/缓存
 - 流式回放：SSE 持久化事件流，前端断线可继续拉取
-- 单体部署：不依赖 Redis 等外部服务
+- 单体部署：不依赖额外的外部缓存服务
 
 ## 核心组件
 - **API 网关层**：`server/analyze/api.py` + 旧接口兼容（如 `/api/stream`、`/api/scholar-pk`）

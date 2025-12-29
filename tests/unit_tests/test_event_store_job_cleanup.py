@@ -1,122 +1,68 @@
-import os
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
 
 
-class _FakePipeline:
-    def __init__(self, redis):
-        self._redis = redis
-        self._ops = []
-
-    def expire(self, key, ttl):
-        self._ops.append(("expire", key, int(ttl)))
-        return self
-
-    def unlink(self, *keys):
-        self._ops.append(("unlink", list(keys)))
-        return self
-
-    def delete(self, *keys):
-        self._ops.append(("delete", list(keys)))
-        return self
-
-    def execute(self):
-        self._redis.pipeline_ops.extend(self._ops)
-        self._ops = []
-        return []
+class _FakeCard:
+    def __init__(self, *, card_id: int, output=None):
+        self.id = int(card_id)
+        self.output = output
+        self.updated_at = None
 
 
-class _FakeRedis:
-    def __init__(self, *, scan_keys):
-        self._counters = {}
-        self.scan_keys = list(scan_keys)
-        self.pipeline_ops = []
-        self.set_ops = []
-        self.xadd_ops = []
-
-    def incr(self, key):
-        cur = int(self._counters.get(key) or 0) + 1
-        self._counters[key] = cur
-        return cur
-
-    def xadd(self, key, values, id=None, maxlen=None, approximate=None):
-        self.xadd_ops.append((key, values, id, maxlen, approximate))
-        return id
-
-    def set(self, key, value):
-        self.set_ops.append((key, value))
-        return True
-
-    def pipeline(self):
-        return _FakePipeline(self)
-
-    def scan_iter(self, match=None, count=None):
-        # Best-effort: return the provided keys (test controls the namespace via the key names).
-        for k in self.scan_keys:
-            yield k
-
-    def unlink(self, *keys):
-        # Existence is used by EventStore to decide between UNLINK and DEL.
-        return 0
-
-
-class _DummySession:
-    def add(self, obj):  # noqa: ARG002
-        return None
-
-    def query(self, *args, **kwargs):  # noqa: ARG002
-        return self
+class _FakeQuery:
+    def __init__(self, result):
+        self._result = result
 
     def filter(self, *args, **kwargs):  # noqa: ARG002
         return self
 
-    def update(self, *args, **kwargs):  # noqa: ARG002
-        return 1
+    def with_for_update(self):
+        return self
+
+    def first(self):
+        return self._result
+
+
+class _FakeSession:
+    def __init__(self, *, card: _FakeCard):
+        self._card = card
+        self.added = []
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    def query(self, *args, **kwargs):  # noqa: ARG002
+        return _FakeQuery(self._card)
 
 
 @contextmanager
-def _fake_db_session():
-    yield _DummySession()
+def _fake_db_session(sess: _FakeSession):
+    yield sess
 
 
-class TestEventStoreJobCompletedCleanup(unittest.TestCase):
-    def test_job_completed_sets_post_ttl_and_deletes_artifacts(self):
-        fake = _FakeRedis(
-            scan_keys=[
-                b"dinq:artifact:job123:aaa",
-                b"dinq:artifact:job123:bbb",
-            ]
-        )
+class TestEventStoreCardAppend(unittest.TestCase):
+    def test_append_event_applies_card_append_with_dedup(self):
+        from server.tasks.event_store import EventStore
 
-        env = {
-            "DINQ_REDIS_JOB_TTL_SECONDS": "0",  # disable general touch TTL to keep assertions focused
-            "DINQ_REDIS_CLEANUP_ON_JOB_COMPLETED": "1",
-            "DINQ_REDIS_POST_JOB_TTL_SECONDS": "123",
-        }
+        store = EventStore()
+        store._next_seq = lambda session, job_id: 1  # type: ignore[method-assign]  # noqa: ARG005
 
-        with (
-            patch.dict(os.environ, env, clear=False),
-            patch("server.tasks.event_store.get_redis_client", return_value=fake),
-            patch("server.tasks.event_store.get_db_session", _fake_db_session),
-        ):
-            from server.tasks.event_store import EventStore
+        card = _FakeCard(card_id=1, output={"data": {"items": [{"id": 1}]}, "stream": {}})
+        sess = _FakeSession(card=card)
 
-            store = EventStore()
-            store.append_event(job_id="job123", card_id=None, event_type="job.completed", payload={"job_id": "job123"})
+        with patch("server.tasks.event_store.get_db_session", lambda: _fake_db_session(sess)):
+            store.append_event(
+                job_id="job123",
+                card_id=1,
+                event_type="card.append",
+                payload={"path": "items", "items": [{"id": 1}, {"id": 2}], "dedup_key": "id"},
+            )
 
-        expires = [(op[1], op[2]) for op in fake.pipeline_ops if op and op[0] == "expire"]
-        self.assertIn(("dinq:job:job123:events", 123), expires)
-        self.assertIn(("dinq:job:job123:last_seq", 123), expires)
-        self.assertIn(("dinq:job:job123:terminal_seq", 123), expires)
-
-        unlink_ops = [op for op in fake.pipeline_ops if op and op[0] == "unlink"]
-        self.assertTrue(unlink_ops)
-        deleted_keys = []
-        for op in unlink_ops:
-            deleted_keys.extend(op[1])
-        self.assertIn(b"dinq:artifact:job123:aaa", deleted_keys)
-        self.assertIn(b"dinq:artifact:job123:bbb", deleted_keys)
+        data = (card.output or {}).get("data") or {}
+        items = data.get("items") or []
+        ids = [it.get("id") for it in items if isinstance(it, dict)]
+        self.assertEqual(ids, [1, 2])
 
 
 if __name__ == "__main__":

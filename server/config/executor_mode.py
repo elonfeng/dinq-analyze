@@ -29,7 +29,8 @@ def get_executor_mode() -> ExecutorMode:
     if raw == "":
         # SQLite is used heavily for local/CI benches. External runner topology is not a good default
         # there (and often surprises users when DINQ_ENV=production is set in .env files).
-        db_url = (os.getenv("DINQ_DB_URL") or os.getenv("DATABASE_URL") or "").strip().lower()
+        jobs_db_url = (os.getenv("DINQ_JOBS_DB_URL") or "").strip().lower()
+        db_url = (jobs_db_url or os.getenv("DINQ_DB_URL") or os.getenv("DATABASE_URL") or "").strip().lower()
         if db_url.startswith("sqlite:"):
             return "inprocess"
         runtime_env = (os.getenv("DINQ_ENV") or os.getenv("FLASK_ENV") or "").strip().lower()

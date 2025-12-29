@@ -1,6 +1,5 @@
 import json
 import unittest
-from unittest.mock import patch
 
 from src.models.db import AnalysisJobEvent
 
@@ -19,26 +18,28 @@ class _FakeJobStore:
 
 
 class TestEventStoreStreamTerminalFallback(unittest.TestCase):
-    def test_stream_events_recovers_terminal_event_from_db(self):
-        with patch("server.tasks.event_store.get_redis_client", return_value=None):
-            from server.tasks.event_store import EventStore
+    def test_stream_events_yields_terminal_event_and_stops(self):
+        from server.tasks.event_store import EventStore
 
-            store = EventStore()
+        store = EventStore()
 
-        # Simulate: realtime stream has no more events, but DB says the job is terminal and has a terminal event.
-        store.fetch_events = lambda job_id, after_seq, limit=500: []  # noqa: E731
-        store._get_terminal_seq = lambda job_id, terminal_event_types: 5  # noqa: E731
-        store._fetch_events_db = (  # noqa: E731
-            lambda job_id, after_seq, limit=500: [
-                AnalysisJobEvent(
-                    job_id=job_id,
-                    card_id=None,
-                    seq=5,
-                    event_type="job.completed",
-                    payload={"status": "completed"},
-                )
-            ]
-        )
+        calls = {"n": 0}
+
+        def _fake_fetch_events(job_id, *, after_seq, limit=500):  # noqa: ARG001
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return [
+                    AnalysisJobEvent(
+                        job_id=job_id,
+                        card_id=None,
+                        seq=5,
+                        event_type="job.completed",
+                        payload={"status": "completed"},
+                    )
+                ]
+            return []
+
+        store.fetch_events = _fake_fetch_events  # type: ignore[method-assign]
 
         gen = store.stream_events(
             job_id="job123",
@@ -64,4 +65,3 @@ class TestEventStoreStreamTerminalFallback(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -629,7 +629,7 @@ class LLMGateway:
                 except Exception:
                     pass
             # When `stream=True`, the streaming transport already forwarded deltas via stream_callback.
-            # Avoid replaying the full text again (would duplicate UI deltas and inflate Redis payloads).
+            # Avoid replaying the full text again (would duplicate UI deltas and inflate cache payloads).
             if stream_callback and (not stream):
                 for chunk in _split_chunks(a.text):
                     stream_callback(chunk)

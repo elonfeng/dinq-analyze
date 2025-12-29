@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import os
+import logging
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from server.analyze.card_specs import get_stream_spec
@@ -27,6 +28,9 @@ from server.tasks.event_store import EventStore
 from server.tasks.output_schema import extract_output_parts
 from server.utils.json_clean import prune_empty
 from server.utils.timing import elapsed_ms, now_perf
+
+
+logger = logging.getLogger(__name__)
 
 
 class CardScheduler:
@@ -48,6 +52,11 @@ class CardScheduler:
         self._poll_interval = poll_interval
         self._max_workers = max(1, int(max_workers or 1))
         self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
+
+        # Best-effort write-behind for final_result cache persistence.
+        # This keeps user-visible completion fast (SSE job.completed) even when the DB is high RTT.
+        cache_workers = max(1, min(self._read_int_env("DINQ_ANALYZE_CACHE_WRITE_MAX_WORKERS", 2), 8))
+        self._cache_executor = ThreadPoolExecutor(max_workers=cache_workers, thread_name_prefix="dinq-cache-write")
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -72,8 +81,8 @@ class CardScheduler:
         self._job_cache: "OrderedDict[str, object]" = OrderedDict()
         self._job_cache_lock = threading.Lock()
 
-        # Redis realtime is the fast path, but Redis keys may expire/evict. Persist final business-card outputs
-        # into DB (size-capped) so /jobs snapshots can fall back if Redis data is missing.
+        # Persist final business-card outputs into DB (size-capped) so /jobs snapshots remain usable even when
+        # individual card payloads are large.
         self._persist_outputs_to_db = self._read_bool_env("DINQ_PERSIST_CARD_OUTPUT_TO_DB", True)
         self._persist_outputs_max_bytes = max(0, self._read_int_env("DINQ_PERSIST_CARD_OUTPUT_MAX_BYTES", 1_000_000))
 
@@ -220,9 +229,8 @@ class CardScheduler:
         """
         Finalize a card (DB status update) and return the output envelope for `card.completed`.
 
-        In Redis realtime mode, we keep stream text in Redis. For completed business cards we:
-        - optionally persist final output.data into DB (size-capped), and
-        - attach the current Redis stream snapshot into the SSE payload so clients keep partial deltas.
+        This implementation persists streaming deltas into `job_cards.output.stream` via `card.delta`
+        events, and persists final `output.data` into `job_cards.output.data` on completion.
         """
 
         ended_at = datetime.utcnow()
@@ -249,33 +257,6 @@ class CardScheduler:
                 output = cleaned
         except Exception:
             pass
-
-        if self._event_store.redis_enabled():
-            try:
-                existing = self._event_store.get_card_output(card_id=int(card_id))
-                stream = existing.get("stream") if isinstance(existing, dict) else {}
-                if not isinstance(stream, dict):
-                    stream = {}
-            except Exception:
-                stream = {}
-
-            try:
-                if self._should_persist_card_output_to_db(output):
-                    stored = output if isinstance(output, dict) else {"data": output, "stream": {}}
-                    self._job_store.update_card_status(
-                        card_id=int(card_id),
-                        status="completed",
-                        output=stored,
-                        preserve_existing_stream=False,
-                        ended_at=ended_at,
-                    )
-                else:
-                    # Leave output as-is (avoid large JSON write); status/ended_at still updated.
-                    self._job_store.update_card_status(card_id=int(card_id), status="completed", output=None, ended_at=ended_at)
-            except Exception:
-                pass
-
-            return {"data": output, "stream": stream or {}}
 
         merged_output = self._job_store.update_card_status(card_id=int(card_id), status="completed", output=output, ended_at=ended_at)
         return merged_output or {"data": output, "stream": {}}
@@ -517,33 +498,26 @@ class CardScheduler:
                     if current_retry < max_retries:
                         next_retry = current_retry + 1
                         # Keep partial data for UX while retrying.
-                        if self._event_store.redis_enabled():
-                            self._job_store.update_card_status(
-                                card_id=card_id,
-                                status="ready",
-                                output=None,
-                                retry_count=next_retry,
-                                ended_at=datetime.utcnow(),
-                            )
-                            try:
-                                existing = self._event_store.get_card_output(card_id=int(card_id))
-                                stream = existing.get("stream") if isinstance(existing, dict) else {}
-                                self._event_store.append_event(
-                                    job_id=job_id,
-                                    card_id=card_id,
-                                    event_type="card.prefill",
-                                    payload={"card": ct, "payload": {"data": decision.normalized, "stream": stream or {}}},
-                                )
-                            except Exception:
-                                pass
-                        else:
-                            self._job_store.update_card_status(
+                        env = None
+                        try:
+                            env = self._job_store.update_card_status(
                                 card_id=card_id,
                                 status="ready",
                                 output=decision.normalized,
                                 retry_count=next_retry,
                                 ended_at=datetime.utcnow(),
                             )
+                        except Exception:
+                            env = None
+                        try:
+                            self._event_store.append_event(
+                                job_id=job_id,
+                                card_id=card_id,
+                                event_type="card.prefill",
+                                payload={"card": ct, "payload": env or {"data": decision.normalized, "stream": {}}},
+                            )
+                        except Exception:
+                            pass
                         try:
                             self._event_store.append_event(
                                 job_id=job_id,
@@ -794,6 +768,25 @@ class CardScheduler:
             meta={"cache": "write_final_result", "job_id": str(job_id), "subject_key": subject_key},
         )
 
+    def _write_final_result_cache_async(self, job_id: str) -> None:
+        try:
+            fut = self._cache_executor.submit(self._maybe_save_final_result_cache, str(job_id))
+        except Exception:
+            return
+
+        def _log_exc(f):  # type: ignore[no-untyped-def]
+            try:
+                exc = f.exception()
+            except Exception:
+                exc = None
+            if exc is not None:
+                logger.exception("final_result cache write failed (job_id=%s): %s", job_id, exc)
+
+        try:
+            fut.add_done_callback(_log_exc)
+        except Exception:
+            pass
+
     def _update_job_state(self, job_id: str) -> None:
         counts = self._job_store.count_cards_by_status(job_id)
         pending = counts.get("pending", 0) + counts.get("ready", 0) + counts.get("running", 0)
@@ -817,8 +810,5 @@ class CardScheduler:
             return
 
         if self._job_store.try_finalize_job(job_id, "completed"):
-            try:
-                self._maybe_save_final_result_cache(job_id)
-            except Exception:
-                pass
             self._event_store.append_event(job_id=job_id, card_id=None, event_type="job.completed", payload={"status": "completed"})
+            self._write_final_result_cache_async(job_id)

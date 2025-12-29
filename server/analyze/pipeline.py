@@ -1224,14 +1224,7 @@ class PipelineExecutor:
                     cards = self._job_store.list_cards_for_job(job.id)
                     outputs_by_type: Dict[str, Any] = {}
                     for c in cards:
-                        if self._event_store is not None and self._event_store.redis_enabled() and getattr(c, "id", None) is not None:
-                            try:
-                                env = self._event_store.get_card_output(card_id=int(getattr(c, "id")))
-                                data = env.get("data") if isinstance(env, dict) else None
-                            except Exception:
-                                data = None
-                        else:
-                            data, _ = extract_output_parts(getattr(c, "output", None))
+                        data, _ = extract_output_parts(getattr(c, "output", None))
                         if data is None:
                             continue
                         outputs_by_type[str(c.card_type)] = data

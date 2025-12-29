@@ -28,11 +28,17 @@
 
 ### 1.2 数据库（分析任务 job/events 持久化）
 
-至少需要其一：
+支持“两库”拓扑（推荐）：
+- **jobs DB（运行态）**：`jobs/job_cards/job_events/artifacts` 等（建议本机 SQLite，SSE 回放也从这里读取）
+- **cache DB（唯一事实源缓存）**：`analysis_subjects/analysis_runs/analysis_artifact_cache(final_result)`（建议远程 Postgres）
+
+至少需要配置 jobs DB；cache DB 未配置时会回退到同一个 DB（向后兼容）。
 
 | 环境变量 | 说明 |
 |---|---|
-| `DINQ_DB_URL` | Postgres URL（推荐） |
+| `DINQ_JOBS_DB_URL` | jobs DB URL（推荐本机 SQLite，例如 `sqlite:////data/dinq_jobs.sqlite3`） |
+| `DINQ_CACHE_DB_URL` | cache DB URL（推荐远程 Postgres；不设置则回退到 `DINQ_DB_URL`） |
+| `DINQ_DB_URL` | 旧版统一 DB URL（向后兼容；也作为 cache DB 的默认 fallback） |
 | `DATABASE_URL` | Postgres URL（兼容） |
 
 连接池（多 gunicorn workers 时强烈建议显式配置，避免 `workers × pool_size` 打满数据库）：
@@ -45,6 +51,25 @@
 | `DINQ_DB_POOL_RECYCLE` | 连接回收秒数 | `3600` |
 | `DINQ_DB_CONNECT_TIMEOUT` | DB connect_timeout（秒） | `30` |
 | `DINQ_DB_APP_NAME` | Postgres application_name | `DINQ_App` |
+
+---
+
+## 1.3 SSE 流式推送加速（可选）
+
+默认 SSE 通过数据库事件表 `job_events` 轮询回放（兼容多进程/多实例，支持断线续传）。
+
+为了降低延迟（尤其是本地 inprocess 或多 worker 场景），可开启“推送背板”：
+
+| 环境变量 | 说明 | 默认 |
+|---|---|---|
+| `DINQ_ANALYZE_SSE_BUS_MODE` | `auto/on/off`：是否启用进程内 SSE bus（同进程推送最快；`auto` 仅 `inprocess` 启用） | `auto` |
+| `DINQ_ANALYZE_SSE_BACKPLANE` | `none/nats`：多进程/多实例背板（NATS 仅做 best-effort 推送唤醒；DB 仍是事实源） | `none` |
+| `DINQ_NATS_URL` | NATS 地址（如 `nats://nats:4222`） | `nats://127.0.0.1:4222` |
+| `DINQ_NATS_SUBJECT` | NATS subject | `dinq.job_events` |
+| `DINQ_NATS_PUBLISH_MODE` | `auto/full/wakeup`：`auto` 小消息直推，大消息只发唤醒 | `auto` |
+| `DINQ_NATS_MAX_EVENT_BYTES` | `auto` 模式下直推最大字节数（超出则降级为 wakeup） | `65536` |
+
+> 注意：即使开启 NATS，SSE 仍会保留 DB fallback（防止背板消息丢失导致卡住）。
 
 ---
 
@@ -223,24 +248,11 @@ dinq 会对「同一 subject（人/账号/URL）」的 `full_report` 做跨 job 
 
 ---
 
-## 5.5) Redis Realtime（可选，推荐跨地域 DB 场景）
+## 5.5) Realtime（DB-only）
 
-当 `DINQ_REDIS_URL` 设置后，分析服务会启用 **Redis 实时层**（不影响外部 API 协议）：
-- SSE 回放与 `GET /api/analyze/jobs/<job_id>` 的卡片输出会优先从 Redis 读取（降低 `job_events/job_cards.output` 的跨地域 RTT 影响）。
-- `card.delta` / `card.append` / `card.prefill` / `card.completed` 会在 Redis 中维护可回放事件流与卡片快照。
-- DB 仍用于 `jobs/job_cards` 的调度与 `artifacts`（当前实现；后续可再做异步落盘/更彻底解耦）。
-
-| 环境变量 | 说明 | 默认 |
-|---|---|---|
-| `DINQ_REDIS_URL` | Redis 连接串（为空则禁用 Redis realtime） | - |
-| `DINQ_REDIS_JOB_TTL_SECONDS` | 单个 job 的 Redis 数据 TTL（秒） | `86400` |
-| `DINQ_REDIS_JOB_MAX_EVENTS` | 单个 job 事件流最大长度（0 表示不裁剪） | `0` |
-| `DINQ_REDIS_SOCKET_TIMEOUT_SECONDS` | Redis socket timeout（秒） | `5` |
-| `DINQ_REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS` | Redis connect timeout（秒） | `2` |
-
-提示：
-- 如果你仍使用 systemd 部署 API/Runner，只需要额外启动一个本机 Redis（推荐只监听 `127.0.0.1`），并在 `.env.production` 设置 `DINQ_REDIS_URL=redis://127.0.0.1:6379/0` 后重启服务即可。
-- 如果你使用 `docker compose`，可直接 `docker compose up -d redis` 启动。
+Analyze 的流式事件（SSE）与快照恢复均基于数据库：
+- SSE：轮询 `job_events`（按 `seq` 递增回放）
+- 快照：读取 `job_cards.output`（包含 `card.delta/card.append` 写入的增量结果）
 
 ---
 

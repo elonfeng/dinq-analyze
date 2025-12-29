@@ -21,9 +21,11 @@ from server.analyze.cache_policy import (
     compute_options_hash,
     get_pipeline_version,
     is_cacheable_subject,
+    cache_ttl_seconds,
 )
 from server.analyze.input_resolver import SOURCE_INPUT_KEYS, normalize_input_payload
 from server.analyze.subject import resolve_subject_key
+from server.analyze import bg_refresh
 from server.tasks.job_store import JobStore
 from server.tasks.event_store import EventStore
 from server.tasks.artifact_store import ArtifactStore
@@ -54,6 +56,10 @@ _scheduler: Optional[CardScheduler] = None
 _analysis_cache = AnalysisCacheStore()
 _async_create_executor: Optional[ThreadPoolExecutor] = None
 _async_create_executor_lock = threading.Lock()
+_refresh_schedule_lock = threading.Lock()
+_recent_refresh_schedules: Dict[str, float] = {}
+_hit_count_lock = threading.Lock()
+_recent_hit_counts: Dict[str, Dict[str, float]] = {}
 
 
 def _read_int_env(name: str, default: int) -> int:
@@ -80,6 +86,198 @@ def _async_create_job_enabled() -> bool:
 def _cache_hit_direct_response_enabled() -> bool:
     # Default to true when async-create is enabled, because the primary goal is "no DB writes on create".
     return _read_bool_env("DINQ_ANALYZE_CACHE_HIT_DIRECT_RESPONSE", _async_create_job_enabled())
+
+
+def _swr_refresh_enabled() -> bool:
+    return _read_bool_env("DINQ_ANALYZE_SWR_REFRESH_ENABLED", True)
+
+
+def _swr_refresh_dedup_seconds() -> int:
+    return max(10, min(_read_int_env("DINQ_ANALYZE_SWR_REFRESH_DEDUP_SECONDS", 300), 24 * 3600))
+
+
+def _swr_refresh_every_n_hits(source: str) -> int:
+    src = (source or "").strip().upper()
+    return max(
+        0,
+        _read_int_env(
+            f"DINQ_ANALYZE_SWR_REFRESH_EVERY_N_HITS_{src}",
+            _read_int_env("DINQ_ANALYZE_SWR_REFRESH_EVERY_N_HITS", 20),
+        ),
+    )
+
+
+def _incr_final_result_cache_hit_count(*, artifact_key: str, ttl_seconds: int) -> Optional[int]:
+    """
+    Best-effort global cache-hit counter.
+
+    This is used to trigger background refresh after N reads even when TTL is not expired.
+    """
+
+    key = str(artifact_key or "").strip()
+    if not key:
+        return None
+    # Local best-effort counter (per-process). This enables "every N hits" refresh triggers
+    # without requiring any external shared cache. It is intentionally approximate: multi-worker
+    # processes may refresh more frequently, which is acceptable under "speed > cost".
+    expire_s = int(ttl_seconds or 0)
+    if expire_s <= 0:
+        expire_s = 7 * 24 * 3600
+    expire_s = max(60, min(expire_s, 30 * 24 * 3600))
+
+    now = time.monotonic()
+    with _hit_count_lock:
+        rec = _recent_hit_counts.get(key) or {}
+        reset_at = float(rec.get("reset_at", 0.0) or 0.0)
+        if reset_at <= 0.0 or now >= reset_at:
+            rec = {"count": 0.0, "reset_at": now + float(expire_s)}
+        rec["count"] = float(rec.get("count", 0.0) or 0.0) + 1.0
+        _recent_hit_counts[key] = rec
+
+        # Opportunistic cleanup (avoid unbounded growth).
+        if len(_recent_hit_counts) > 2048:
+            cutoff = now - float(expire_s) * 2.0
+            for k, r in list(_recent_hit_counts.items()):
+                ra = float((r or {}).get("reset_at", 0.0) or 0.0)
+                if ra <= 0.0 or ra < cutoff:
+                    _recent_hit_counts.pop(k, None)
+
+        try:
+            return int(rec["count"])
+        except Exception:
+            return None
+
+
+def _acquire_refresh_schedule_token(*, artifact_key: str) -> bool:
+    """
+    Best-effort dedupe for refresh scheduling to avoid spawning refresh tasks on every cache-hit.
+    """
+
+    key = str(artifact_key or "").strip()
+    if not key:
+        return False
+
+    dedup_s = int(_swr_refresh_dedup_seconds())
+    now = time.monotonic()
+    with _refresh_schedule_lock:
+        last = _recent_refresh_schedules.get(key)
+        if last is not None and (now - float(last)) < float(dedup_s):
+            return False
+        _recent_refresh_schedules[key] = now
+        # Opportunistic cleanup (avoid unbounded growth).
+        if len(_recent_refresh_schedules) > 1024:
+            cutoff = now - float(dedup_s) * 2.0
+            for k, t in list(_recent_refresh_schedules.items()):
+                if float(t) < cutoff:
+                    _recent_refresh_schedules.pop(k, None)
+    return True
+
+
+def _enqueue_final_result_refresh(
+    *,
+    user_id: str,
+    source: str,
+    subject_key: str,
+    normalized_input: Dict[str, Any],
+    options: Dict[str, Any],
+    options_hash: str,
+    pipeline_version: str,
+    reason: str,
+) -> None:
+    if not _swr_refresh_enabled():
+        return
+
+    src = (source or "").strip().lower()
+    sk = (subject_key or "").strip()
+    if not src or not sk or not is_cacheable_subject(source=src, subject_key=sk):
+        return
+
+    try:
+        artifact_key = build_artifact_key(
+            source=src,
+            subject_key=sk,
+            pipeline_version=str(pipeline_version or ""),
+            options_hash=str(options_hash or ""),
+            kind="final_result",
+        )
+    except Exception:
+        return
+
+    if not _acquire_refresh_schedule_token(artifact_key=str(artifact_key)):
+        return
+
+    refresh_user_id = "system"
+    cache_store = AnalysisCacheStore()
+
+    def _task() -> None:
+        subject = None
+        try:
+            subject = cache_store.get_or_create_subject(
+                source=src,
+                subject_key=sk,
+                canonical_input={"content": str((normalized_input or {}).get("content") or "").strip()},
+            )
+        except Exception:
+            return
+
+        try:
+            refresh_owner = cache_store.try_begin_refresh_run(
+                subject_id=int(subject.id),
+                pipeline_version=str(pipeline_version or ""),
+                options_hash=str(options_hash or ""),
+                fingerprint=None,
+                meta={
+                    "cache": "bg_refresh",
+                    "kind": "final_result",
+                    "reason": str(reason or ""),
+                    "trigger_user_id": str(user_id or ""),
+                },
+            )
+        except Exception:
+            refresh_owner = False
+        if not refresh_owner:
+            return
+
+        refresh_options = dict(options or {})
+        refresh_options["force_refresh"] = True
+
+        try:
+            job_id, _created = create_analysis_job(
+                user_id=str(refresh_user_id),
+                source=src,
+                input_payload=dict(normalized_input or {}),
+                requested_cards=None,
+                options=refresh_options,
+                subject_key=sk,
+                idempotency_key=None,
+                request_hash=None,
+                initial_ready=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            try:
+                cache_store.fail_refresh_run(
+                    subject_id=int(subject.id),
+                    pipeline_version=str(pipeline_version or ""),
+                    options_hash=str(options_hash or ""),
+                    reason="refresh_job_create_failed",
+                    meta={"error": str(exc)[:200]},
+                )
+            except Exception:
+                pass
+            return
+
+        try:
+            if scheduler_enabled():
+                init_scheduler()
+        except Exception:
+            pass
+
+        try:
+            _job_store.release_ready_cards(str(job_id))
+        except Exception:
+            pass
+
+    bg_refresh.submit(name=f"final_result_refresh:{src}:{sk}", fn=_task)
 
 
 def _get_async_create_executor() -> ThreadPoolExecutor:
@@ -284,9 +482,6 @@ def _try_get_l1_cached_final_result(
     pipeline_version: str,
     options_hash: str,
 ) -> Optional[Dict[str, Any]]:
-    cache = get_sqlite_cache()
-    if cache is None:
-        return None
     try:
         artifact_key = build_artifact_key(
             source=str(source or "").strip().lower(),
@@ -296,6 +491,11 @@ def _try_get_l1_cached_final_result(
             kind="final_result",
         )
     except Exception:
+        return None
+
+    # L1 (SQLite): single-machine cache.
+    cache = get_sqlite_cache()
+    if cache is None:
         return None
 
     row = None
@@ -412,11 +612,7 @@ def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] 
                 continue
             if requested_cards and ct not in requested_cards:
                 continue
-            card_id = getattr(c, "id", None)
-            if _event_store.redis_enabled() and card_id is not None:
-                env = _event_store.get_card_output(card_id=int(card_id))
-            else:
-                env = ensure_output_envelope(getattr(c, "output", None))
+            env = ensure_output_envelope(getattr(c, "output", None))
             cards_out[ct] = env
 
             st = str(getattr(c, "status", "") or "")
@@ -618,27 +814,8 @@ def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] 
                     _event_store.append_event(job_id=job_id, card_id=c.id, event_type="card.completed", payload={"card": ct, "payload": env, "internal": True})
                     continue
 
-                if _event_store.redis_enabled():
-                    try:
-                        existing = _event_store.get_card_output(card_id=int(c.id))
-                        stream = existing.get("stream") if isinstance(existing, dict) else {}
-                    except Exception:
-                        stream = {}
-                    if _should_persist_card_output_to_db(final_payload):
-                        stored = final_payload if isinstance(final_payload, dict) else {"data": final_payload, "stream": {}}
-                        _job_store.update_card_status(
-                            card_id=c.id,
-                            status="completed",
-                            output=stored,
-                            preserve_existing_stream=False,
-                            retry_count=retry_count,
-                        )
-                    else:
-                        _job_store.update_card_status(card_id=c.id, status="completed", output=None, retry_count=retry_count)
-                    env = {"data": final_payload, "stream": stream or {}}
-                else:
-                    merged = _job_store.update_card_status(card_id=c.id, status="completed", output=final_payload, retry_count=retry_count)
-                    env = merged or {"data": final_payload, "stream": {}}
+                merged = _job_store.update_card_status(card_id=c.id, status="completed", output=final_payload, retry_count=retry_count)
+                env = merged or {"data": final_payload, "stream": {}}
                 _event_store.append_event(job_id=job_id, card_id=c.id, event_type="card.completed", payload={"card": ct, "payload": env, "internal": False})
                 results[ct] = env
             except Exception as exc:  # noqa: BLE001
@@ -710,8 +887,6 @@ def _complete_job_from_cached_final_result(
     stale: bool = False,
 ) -> None:
     cache_meta = {"hit": True, "stale": bool(stale), "as_of": cached_at_iso}
-    use_redis = _event_store.redis_enabled()
-    realtime_events: list[tuple[int, str, Dict[str, Any]]] = []
 
     cards_payload = final_payload.get("cards") if isinstance(final_payload, dict) else None
     if not isinstance(cards_payload, dict) or not cards_payload:
@@ -757,20 +932,19 @@ def _complete_job_from_cached_final_result(
 
         next_seq = 0
         events: list[AnalysisJobEvent] = []
-        if not use_redis:
+        last_seq = 0
+        try:
+            last_seq = int(getattr(job, "last_seq", 0) or 0) if job is not None else 0
+        except Exception:
             last_seq = 0
-            try:
-                last_seq = int(getattr(job, "last_seq", 0) or 0) if job is not None else 0
-            except Exception:
-                last_seq = 0
-            if last_seq <= 0:
-                max_seq = (
-                    session.query(func.max(AnalysisJobEvent.seq))
-                    .filter(AnalysisJobEvent.job_id == job_id)
-                    .scalar()
-                )
-                last_seq = int(max_seq or 0)
-            next_seq = int(last_seq) + 1
+        if last_seq <= 0:
+            max_seq = (
+                session.query(func.max(AnalysisJobEvent.seq))
+                .filter(AnalysisJobEvent.job_id == job_id)
+                .scalar()
+            )
+            last_seq = int(max_seq or 0)
+        next_seq = int(last_seq) + 1
 
         src = str(source or "").strip().lower()
         for c in cards:
@@ -784,19 +958,17 @@ def _complete_job_from_cached_final_result(
                 # Backward-compat: older jobs may include full_report; complete it as internal empty.
                 c.status = "completed"
                 payload = {"card": ct, "payload": {"data": {}, "stream": {}}, "cache": cache_meta, "internal": True}
-                if not use_redis:
-                    c.output = {"data": {}, "stream": {}}
-                    events.append(
-                        AnalysisJobEvent(
-                            job_id=job_id,
-                            card_id=c.id,
-                            seq=next_seq,
-                            event_type="card.completed",
-                            payload=payload,
-                        )
+                c.output = {"data": {}, "stream": {}}
+                events.append(
+                    AnalysisJobEvent(
+                        job_id=job_id,
+                        card_id=c.id,
+                        seq=next_seq,
+                        event_type="card.completed",
+                        payload=payload,
                     )
-                    next_seq += 1
-                realtime_events.append((int(c.id), "card.completed", payload))
+                )
+                next_seq += 1
                 continue
 
             decision = validate_card_output(
@@ -808,48 +980,34 @@ def _complete_job_from_cached_final_result(
             payload = decision.normalized
             c.status = "completed"
             ev_payload = {"card": ct, "payload": {"data": payload, "stream": {}}, "cache": cache_meta, "internal": False}
-            if not use_redis:
-                c.output = {"data": payload, "stream": {}}
-                events.append(
-                    AnalysisJobEvent(
-                        job_id=job_id,
-                        card_id=c.id,
-                        seq=next_seq,
-                        event_type="card.completed",
-                        payload=ev_payload,
-                    )
-                )
-                next_seq += 1
-            realtime_events.append((int(c.id), "card.completed", ev_payload))
-
-        job.status = "completed"
-        job.updated_at = datetime.utcnow()
-        if not use_redis:
-            try:
-                job.last_seq = int(next_seq)
-            except Exception:
-                pass
+            c.output = {"data": payload, "stream": {}}
             events.append(
                 AnalysisJobEvent(
                     job_id=job_id,
-                    card_id=None,
+                    card_id=c.id,
                     seq=next_seq,
-                    event_type="job.completed",
-                    payload={"status": "completed", "cache": cache_meta},
+                    event_type="card.completed",
+                    payload=ev_payload,
                 )
             )
-            session.add_all(events)
+            next_seq += 1
 
-    if use_redis:
-        for cid, et, p in realtime_events:
-            try:
-                _event_store.append_event(job_id=job_id, card_id=int(cid), event_type=str(et), payload=p)
-            except Exception:
-                pass
+        job.status = "completed"
+        job.updated_at = datetime.utcnow()
         try:
-            _event_store.append_event(job_id=job_id, card_id=None, event_type="job.completed", payload={"status": "completed", "cache": cache_meta})
+            job.last_seq = int(next_seq)
         except Exception:
             pass
+        events.append(
+            AnalysisJobEvent(
+                job_id=job_id,
+                card_id=None,
+                seq=next_seq,
+                event_type="job.completed",
+                payload={"status": "completed", "cache": cache_meta},
+            )
+        )
+        session.add_all(events)
 
 
 def _read_idempotency_key() -> str:
@@ -1035,27 +1193,53 @@ def analyze():
         options=options_raw or {},
     ) if idempotency_key else None
 
+    # SWR refresh: when we serve a cached final_result, optionally enqueue a background recompute
+    # based on TTL staleness or cache-hit count thresholds. This must be best-effort and never block UX.
+    if cache_hit_payload is not None and subject_key and is_cacheable_subject(source=source, subject_key=subject_key) and not force_refresh:
+        refresh_reason: Optional[str] = None
+        if cache_hit_stale:
+            refresh_reason = "ttl_expired"
+        else:
+            every_n = _swr_refresh_every_n_hits(source)
+            if every_n > 0:
+                try:
+                    artifact_key = build_artifact_key(
+                        source=str(source),
+                        subject_key=str(subject_key),
+                        pipeline_version=str(pipeline_version),
+                        options_hash=str(options_hash),
+                        kind="final_result",
+                    )
+                except Exception:
+                    artifact_key = ""
+                if artifact_key:
+                    hits = _incr_final_result_cache_hit_count(
+                        artifact_key=str(artifact_key),
+                        ttl_seconds=cache_ttl_seconds(source),
+                    )
+                    if hits is not None and hits > 0 and every_n > 0 and (hits % every_n == 0):
+                        refresh_reason = f"hit_count:{hits}"
+
+        if refresh_reason:
+            try:
+                _enqueue_final_result_refresh(
+                    user_id=str(user_id or ""),
+                    source=source,
+                    subject_key=str(subject_key),
+                    normalized_input=dict(normalized_input or {}),
+                    options=dict(options or {}),
+                    options_hash=str(options_hash),
+                    pipeline_version=str(pipeline_version),
+                    reason=str(refresh_reason),
+                )
+            except Exception:
+                pass
+
     # Cache-hit direct response (no DB writes): return cards immediately.
     # This keeps create() fast even when Postgres is high RTT, and avoids the slow "complete job from cache"
     # DB write path.
     if mode == "async" and cache_hit_payload is not None and _cache_hit_direct_response_enabled() and not idempotency_key:
         job_id = uuid.uuid4().hex
-        fut = _get_async_create_executor().submit(
-            _background_create_job_bundle,
-            job_id=job_id,
-            user_id=user_id,
-            source=source,
-            normalized_input=dict(normalized_input or {}),
-            requested_cards=list(requested_cards) if requested_cards else None,
-            options=dict(options or {}),
-            subject_key=subject_key or None,
-            initial_ready=False,
-            cache_hit_payload=dict(cache_hit_payload) if isinstance(cache_hit_payload, dict) else None,
-            cache_hit_cached_at_iso=cache_hit_cached_at_iso,
-            cache_hit_stale=bool(cache_hit_stale),
-        )
-        fut.add_done_callback(lambda f: _log_future_exception("async_create_job_bundle_cache_hit", f))
-
         cards_out = _build_cards_from_final_cache_payload(
             source=source,
             final_payload=cache_hit_payload,
@@ -1071,7 +1255,8 @@ def analyze():
                 "cache_hit": True,
                 "cache_stale": bool(cache_hit_stale),
                 "cache_source": cache_hit_source,
-                "async_create": True,
+                # Speed-first: cache-hit does not require a persisted job bundle.
+                "async_create": False,
                 "cards": cards_out,
                 "errors": [],
                 "idempotent_replay": False,
@@ -1100,20 +1285,27 @@ def analyze():
         if api_should_start_scheduler():
             init_scheduler()
 
-        return jsonify(
-            {
-                "success": True,
-                "source": source,
-                "job_id": job_id,
-                "subject_key": subject_key,
-                "status": "queued",
-                "cache_hit": bool(cache_hit_payload is not None),
-                "cache_stale": bool(cache_hit_stale) if cache_hit_payload is not None else False,
-                "cache_source": cache_hit_source if cache_hit_payload is not None else None,
-                "async_create": True,
-                "idempotent_replay": False,
-            }
-        )
+        payload: Dict[str, Any] = {
+            "success": True,
+            "source": source,
+            "job_id": job_id,
+            "subject_key": subject_key,
+            "status": "queued",
+            "cache_hit": bool(cache_hit_payload is not None),
+            "cache_stale": bool(cache_hit_stale) if cache_hit_payload is not None else False,
+            "cache_source": cache_hit_source if cache_hit_payload is not None else None,
+            "async_create": True,
+            "idempotent_replay": False,
+        }
+        if cache_hit_payload is not None:
+            payload["status"] = "completed"
+            payload["cards"] = _build_cards_from_final_cache_payload(
+                source=source,
+                final_payload=cache_hit_payload,
+                requested_cards=requested_cards,
+            )
+            payload["errors"] = []
+        return jsonify(payload)
 
     try:
         job_id, created = create_analysis_job(
@@ -1143,14 +1335,6 @@ def analyze():
             return jsonify({"success": False, "error": "invalid idempotency request"}), 400
         raise
 
-    # When Redis realtime is enabled, ensure a best-effort `job.started` event is present in Redis so SSE clients
-    # can start immediately without depending on cross-region DB job_events.
-    if created and _event_store.redis_enabled():
-        try:
-            _event_store.bootstrap_job_started_realtime(job_id=job_id, source=source)
-        except Exception:
-            pass
-
     if mode == "sync":
         if created and cache_hit_payload is not None:
             _complete_job_from_cached_final_result(
@@ -1172,6 +1356,11 @@ def analyze():
             cached_at_iso=cache_hit_cached_at_iso,
             stale=bool(cache_hit_stale),
         )
+        cards_out = _build_cards_from_final_cache_payload(
+            source=source,
+            final_payload=cache_hit_payload,
+            requested_cards=requested_cards,
+        )
         return jsonify(
             {
                 "success": True,
@@ -1182,6 +1371,8 @@ def analyze():
                 "cache_hit": True,
                 "cache_stale": bool(cache_hit_stale),
                 "cache_source": cache_hit_source,
+                "cards": cards_out,
+                "errors": [],
                 "idempotent_replay": False,
             }
         )
@@ -1213,8 +1404,7 @@ def get_job(job_id: str):
     if request.method == "OPTIONS":
         return Response(status=200)
 
-    use_redis = _event_store.redis_enabled()
-    rec = _job_store.get_job_with_cards(job_id, include_output=(not use_redis))
+    rec = _job_store.get_job_with_cards(job_id, include_output=True)
     if rec is None and _async_create_job_enabled():
         wait_s_raw = os.getenv("DINQ_ANALYZE_JOB_WAIT_FOR_CREATE_SECONDS") or os.getenv("DINQ_ANALYZE_STREAM_WAIT_FOR_JOB_SECONDS") or "10"
         poll_s_raw = os.getenv("DINQ_ANALYZE_JOB_WAIT_FOR_CREATE_POLL_SECONDS") or os.getenv("DINQ_ANALYZE_STREAM_WAIT_FOR_JOB_POLL_SECONDS") or "0.15"
@@ -1231,7 +1421,7 @@ def get_job(job_id: str):
         deadline = time.monotonic() + max(0.0, wait_s)
         while rec is None and time.monotonic() < deadline:
             time.sleep(poll_s)
-            rec = _job_store.get_job_with_cards(job_id, include_output=(not use_redis))
+            rec = _job_store.get_job_with_cards(job_id, include_output=True)
     if rec is None:
         return jsonify({"success": False, "error": "job not found"}), 404
 
@@ -1241,63 +1431,14 @@ def get_job(job_id: str):
         return jsonify({"success": False, "error": "job not found"}), 404
     cards = rec["cards"]
     # Avoid an extra DB round trip: jobs.last_seq is maintained by EventStore.append_event.
-    if _event_store.redis_enabled():
+    try:
+        last_seq = int(getattr(job, "last_seq", 0) or 0)
+    except Exception:
+        last_seq = 0
+    if last_seq <= 0:
         last_seq = _event_store.get_last_seq(job_id)
-    else:
-        try:
-            last_seq = int(getattr(job, "last_seq", 0) or 0)
-        except Exception:
-            last_seq = 0
-        if last_seq <= 0:
-            last_seq = _event_store.get_last_seq(job_id)
 
     source = str(getattr(job, "source", "") or "").strip().lower()
-
-    # In Redis mode, fetch all non-internal card outputs in one pipelined call to reduce RTT/CPU.
-    outputs_by_id: Dict[int, Dict[str, Any]] = {}
-    db_fallback_by_id: Dict[int, Dict[str, Any]] = {}
-    if use_redis:
-        non_internal_ids: list[int] = []
-        for c in cards:
-            ct = str(getattr(c, "card_type", "") or "")
-            if ct == "full_report" or ct.startswith("resource."):
-                continue
-            cid = getattr(c, "id", None)
-            if cid is None:
-                continue
-            try:
-                non_internal_ids.append(int(cid))
-            except Exception:
-                continue
-        try:
-            outputs_by_id = _event_store.get_card_outputs(card_ids=non_internal_ids)
-        except Exception:
-            outputs_by_id = {}
-
-        # Redis keys may be evicted/expired while Redis is still reachable. For completed business cards,
-        # fall back to DB-persisted final outputs (when available) to avoid empty snapshots.
-        missing: list[int] = []
-        for c in cards:
-            ct = str(getattr(c, "card_type", "") or "")
-            if ct == "full_report" or ct.startswith("resource."):
-                continue
-            if str(getattr(c, "status", "") or "") not in ("completed", "failed", "timeout"):
-                continue
-            cid = getattr(c, "id", None)
-            if cid is None:
-                continue
-            try:
-                cid_int = int(cid)
-            except Exception:
-                continue
-            env = outputs_by_id.get(cid_int) if isinstance(outputs_by_id, dict) else None
-            if not isinstance(env, dict) or (env.get("data") is None and not env.get("stream")):
-                missing.append(cid_int)
-        if missing:
-            try:
-                db_fallback_by_id = _job_store.get_card_outputs(missing)
-            except Exception:
-                db_fallback_by_id = {}
 
     def _card_snapshot(c: AnalysisJobCard) -> Dict[str, Any]:
         ct = str(getattr(c, "card_type", "") or "")
@@ -1312,20 +1453,8 @@ def get_job(job_id: str):
             }
 
         output_env: Dict[str, Any]
-        if use_redis:
-            if internal:
-                output_env = {"data": None, "stream": {}}
-            else:
-                try:
-                    cid_int = int(getattr(c, "id"))
-                except Exception:
-                    cid_int = 0
-                env = outputs_by_id.get(cid_int) if cid_int and isinstance(outputs_by_id, dict) else None
-                if not isinstance(env, dict) or (env.get("data") is None and not env.get("stream")):
-                    fallback = db_fallback_by_id.get(cid_int) if cid_int and isinstance(db_fallback_by_id, dict) else None
-                    if isinstance(fallback, dict):
-                        env = fallback
-                output_env = env if isinstance(env, dict) else {"data": None, "stream": {}}
+        if internal:
+            output_env = {"data": None, "stream": {}}
         else:
             output_env = ensure_output_envelope(getattr(c, "output", None))
         return {

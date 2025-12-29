@@ -46,8 +46,10 @@ def _candidate_env_files(project_root: str, runtime_env: str) -> list[str]:
 
     candidates: List[str] = []
     for filename in names:
-        candidates.append(os.path.join(project_root, filename))
+        # Prefer current working directory over project root so parent `.env.*` files
+        # can override the in-repo defaults when running from a higher-level workspace.
         candidates.append(os.path.join(os.getcwd(), filename))
+        candidates.append(os.path.join(project_root, filename))
     # Deduplicate while preserving order
     seen: Set[str] = set()
     ordered: List[str] = []
@@ -63,12 +65,13 @@ def _candidate_env_files(project_root: str, runtime_env: str) -> list[str]:
 def load_environment_variables(log_dinq_vars: bool = False):
     """
     加载环境变量，按照以下顺序尝试：
-    1) 项目根目录 / 当前工作目录下的 .env* 文件（按优先级）
+    1) DINQ_ENV_FILE 指定的单个 .env 文件（若提供）
+    2) 项目根目录 / 当前工作目录下的 .env* 文件（按优先级）
        - .env.<env>.local
        - .env.local
        - .env.<env>
        - .env
-    2) 默认路径（不指定路径）
+    3) 默认路径（不指定路径）
     
     Args:
         log_dinq_vars (bool): 是否记录以 DINQ_ 开头的环境变量，默认为 True
@@ -84,7 +87,27 @@ def load_environment_variables(log_dinq_vars: bool = False):
         runtime_env = _get_runtime_env()
         logger.info("Resolved runtime env: %s", runtime_env)
 
-        candidates = _candidate_env_files(project_root, runtime_env)
+        candidates: List[str] = []
+
+        env_file = str(os.environ.get("DINQ_ENV_FILE") or "").strip()
+        if env_file:
+            # Respect explicit env file selection (relative to current working directory).
+            explicit = os.path.abspath(os.path.join(os.getcwd(), env_file)) if not os.path.isabs(env_file) else os.path.abspath(env_file)
+            candidates.append(explicit)
+
+        candidates.extend(_candidate_env_files(project_root, runtime_env))
+
+        # Deduplicate while preserving order (load_dotenv uses override=False; earlier wins).
+        seen: Set[str] = set()
+        ordered: List[str] = []
+        for p in candidates:
+            p = os.path.abspath(p)
+            if p in seen:
+                continue
+            seen.add(p)
+            ordered.append(p)
+        candidates = ordered
+
         for path in candidates:
             if not os.path.exists(path):
                 continue

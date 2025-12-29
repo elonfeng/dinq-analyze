@@ -198,7 +198,9 @@ def _write_json(path: Path, obj: Any) -> None:
 
 def _ensure_tables(db_url: str) -> None:
     env = os.environ.copy()
-    env["DINQ_DB_URL"] = db_url
+    # Jobs/events DB is always the local sqlite file for the bench. Cache DB (final_result)
+    # can be configured separately via DINQ_CACHE_DB_URL / DINQ_DB_URL in the outer env/.env files.
+    env["DINQ_JOBS_DB_URL"] = db_url
     cmd = [
         sys.executable,
         "-c",
@@ -212,7 +214,7 @@ def _ensure_tables(db_url: str) -> None:
 
 def _start_server(*, host: str, port: int, db_url: str, log_path: Path) -> subprocess.Popen[bytes]:
     env = os.environ.copy()
-    env["DINQ_DB_URL"] = db_url
+    env["DINQ_JOBS_DB_URL"] = db_url
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = open(log_path, "ab", buffering=0)  # noqa: SIM115
     return subprocess.Popen(
@@ -560,7 +562,9 @@ def main() -> int:
                     }
 
                     try:
+                        t_create0 = time.perf_counter()
                         created = _http_json("POST", f"{base_url}/api/analyze", headers=headers, body=req_body, timeout_s=60)
+                        run_out["create_time_s"] = round(time.perf_counter() - t_create0, 3)
                     except Exception as e:
                         run_out["error"] = f"create_job_failed: {e}"
                         runs.append(run_out)
@@ -576,6 +580,25 @@ def main() -> int:
                     if run_out["needs_confirmation"] or not job_id:
                         runs.append(run_out)
                         print(f"[{case.source}/{run_mode}] {run_name}: needs_confirmation={run_out['needs_confirmation']}")
+                        continue
+
+                    # Contract: cache-hit direct response may return full business cards in create(),
+                    # in which case the frontend should render immediately without SSE/snapshot.
+                    direct_cards = created.get("cards")
+                    if created.get("status") == "completed" and isinstance(direct_cards, dict) and direct_cards:
+                        run_out["cache_direct"] = True
+                        run_out["wall_time_client_s"] = run_out.get("create_time_s")
+                        run_out["first_screen"] = {}
+                        run_out["resource_breakdown"] = {}
+                        run_out["cards"] = [
+                            {"card": str(card), "internal": False, "status": "completed", "duration_ms": None}
+                            for card in direct_cards.keys()
+                        ]
+                        run_out["snapshot_ok"] = False
+                        run_out["snapshot_error"] = "skipped: cache_direct"
+                        run_out["status"] = "completed"
+                        runs.append(run_out)
+                        print(f"[{case.source}/{run_mode}] {run_name}: status=completed wall={run_out['wall_time_client_s']}s (cache_direct)")
                         continue
 
                     sse_path = out_dir / "sse" / f"{job_id}.sse"

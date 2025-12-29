@@ -2,8 +2,7 @@
 Artifact store for analysis outputs.
 
 Goal:
-- Use Redis for fast, cross-process access within a job execution window.
-- Provide a local-disk fallback to avoid slow remote DB round-trips during execution.
+- Provide a local-disk cache to avoid slow remote DB round-trips during execution.
 - Keep DB fallback optional (for legacy/backward compatibility).
 """
 from __future__ import annotations
@@ -18,13 +17,10 @@ from typing import Any, Dict, Optional
 
 from src.utils.db_utils import get_db_session
 from src.models.db import AnalysisArtifact
-from server.utils.redis_client import get_redis_client
 
 
 class ArtifactStore:
     def __init__(self) -> None:
-        self._redis = get_redis_client()
-
         raw_disable_db = (os.getenv("DINQ_ARTIFACT_STORE_DISABLE_DB") or "").strip().lower()
         self._db_disabled = raw_disable_db in ("1", "true", "yes", "on")
 
@@ -45,40 +41,17 @@ class ArtifactStore:
             disk_max_bytes = 52_428_800
         self._disk_max_bytes = max(0, int(disk_max_bytes))
 
-        # Artifacts are only needed within a job execution window. Keep the default TTL relatively small to avoid
-        # accumulating large resource payloads in Redis indefinitely. Override via DINQ_REDIS_ARTIFACT_TTL_SECONDS.
-        default_ttl_seconds = 10 * 60
-        try:
-            raw_ttl = os.getenv("DINQ_REDIS_ARTIFACT_TTL_SECONDS")
-            if raw_ttl is None:
-                # Backward compat: if a job TTL is configured, cap artifact TTL to the default unless explicitly overridden.
-                raw_job_ttl = os.getenv("DINQ_REDIS_JOB_TTL_SECONDS")
-                if raw_job_ttl is not None:
-                    ttl = min(int(raw_job_ttl), int(default_ttl_seconds))
-                else:
-                    ttl = int(default_ttl_seconds)
-            else:
-                ttl = int(raw_ttl)
-        except Exception:
-            ttl = int(default_ttl_seconds)
-        self._redis_ttl_seconds = max(0, int(ttl))
-
-        try:
-            max_bytes = int(os.getenv("DINQ_REDIS_ARTIFACT_MAX_BYTES") or "2000000")
-        except Exception:
-            max_bytes = 2_000_000
-        self._redis_max_bytes = max(0, int(max_bytes))
-
-        raw = (os.getenv("DINQ_REDIS_ARTIFACT_COMPRESS") or "1").strip().lower()
-        self._redis_compress = raw in ("1", "true", "yes", "on")
+        raw = (os.getenv("DINQ_ARTIFACT_COMPRESS") or "1").strip().lower()
+        self._compress = raw in ("1", "true", "yes", "on")
 
         raw_types = (os.getenv("DINQ_ARTIFACT_STORE_SKIP_DB_TYPES") or "").strip()
         self._skip_db_types = {t.strip() for t in raw_types.split(",") if t.strip()}
 
         raw_prefixes_env = os.getenv("DINQ_ARTIFACT_STORE_SKIP_DB_PREFIXES")
         if raw_prefixes_env is None:
-            # Default: skip DB writes for large, intermediate resource artifacts when Redis write succeeds.
-            self._skip_db_prefixes = ["resource."]
+            # Default: do not skip DB writes. This keeps job execution reliable even when the local
+            # disk cache is unavailable or the process topology changes (multiple workers/runners).
+            self._skip_db_prefixes = []
         else:
             raw_prefixes = raw_prefixes_env.strip()
             self._skip_db_prefixes = [p.strip() for p in raw_prefixes.split(",") if p.strip()]
@@ -99,16 +72,13 @@ class ArtifactStore:
         enc = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
         return enc.rstrip("=")
 
-    def _redis_artifact_key(self, job_id: str, type: str) -> str:
-        return f"dinq:artifact:{job_id}:{self._b64(type)}"
-
     def _encode(self, obj: Any, *, max_bytes: int) -> Optional[bytes]:
         try:
             raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         except Exception:
             return None
 
-        if self._redis_compress and raw:
+        if self._compress and raw:
             try:
                 comp = zlib.compress(raw, level=6)
                 if len(comp) < len(raw):
@@ -124,7 +94,7 @@ class ArtifactStore:
             return None
         return raw
 
-    def _redis_decode(self, raw: bytes) -> Any:
+    def _decode(self, raw: bytes) -> Any:
         if raw is None:
             return None
         if not isinstance(raw, (bytes, bytearray)) or not raw:
@@ -173,7 +143,7 @@ class ArtifactStore:
         except Exception:
             return None
 
-        obj = self._redis_decode(raw) if isinstance(raw, (bytes, bytearray)) else None
+        obj = self._decode(raw) if isinstance(raw, (bytes, bytearray)) else None
         if not isinstance(obj, dict):
             return None
         payload = obj.get("payload")
@@ -224,64 +194,6 @@ class ArtifactStore:
             return False
         return True
 
-    def _redis_get_artifact(self, *, job_id: str, type: str) -> Optional[AnalysisArtifact]:
-        if not self._redis:
-            return None
-        key = self._redis_artifact_key(job_id, type)
-        try:
-            if self._redis_ttl_seconds > 0:
-                pipe = self._redis.pipeline()
-                pipe.get(key)
-                pipe.expire(key, int(self._redis_ttl_seconds))
-                raw, _ = pipe.execute()
-            else:
-                raw = self._redis.get(key)
-        except Exception:
-            return None
-        obj = self._redis_decode(raw) if isinstance(raw, (bytes, bytearray)) else None
-        if not isinstance(obj, dict):
-            return None
-        payload = obj.get("payload")
-        if not isinstance(payload, dict):
-            payload = {}
-        file_url = obj.get("file_url")
-        if file_url is not None:
-            file_url = str(file_url)
-        card_id = obj.get("card_id")
-        try:
-            card_id_int = int(card_id) if card_id is not None else None
-        except Exception:
-            card_id_int = None
-        return AnalysisArtifact(job_id=str(job_id), card_id=card_id_int, type=str(type), payload=payload, file_url=file_url)
-
-    def _redis_set_artifact(
-        self,
-        *,
-        job_id: str,
-        card_id: Optional[int],
-        type: str,
-        payload: Optional[Dict[str, Any]],
-        file_url: Optional[str],
-    ) -> bool:
-        if not self._redis or self._redis_ttl_seconds <= 0:
-            return False
-        if payload is None:
-            payload = {}
-        if not isinstance(payload, dict):
-            return False
-        key = self._redis_artifact_key(job_id, type)
-        encoded = self._encode({"payload": payload, "file_url": file_url, "card_id": card_id}, max_bytes=int(self._redis_max_bytes))
-        if not encoded:
-            return False
-        try:
-            pipe = self._redis.pipeline()
-            pipe.set(key, encoded)
-            pipe.expire(key, int(self._redis_ttl_seconds))
-            pipe.execute()
-        except Exception:
-            return False
-        return True
-
     def save_artifact(
         self,
         *,
@@ -300,18 +212,12 @@ class ArtifactStore:
         except Exception:
             disk_ok = False
 
-        redis_ok = False
-        try:
-            redis_ok = self._redis_set_artifact(job_id=job_id, card_id=card_id, type=type_str, payload=payload_dict, file_url=file_url)
-        except Exception:
-            redis_ok = False
-
-        # Optional performance switch: for large, intermediate artifacts (e.g. resource.*), allow Redis-only
-        # storage to reduce cross-region DB writes. Only skip DB when Redis write succeeded.
-        if (redis_ok or disk_ok) and self._should_skip_db(type_str):
+        # Optional performance switch: for large, intermediate artifacts (e.g. resource.*), allow disk-only
+        # storage to reduce cross-region DB writes.
+        if disk_ok and self._should_skip_db(type_str):
             return AnalysisArtifact(job_id=str(job_id), card_id=card_id, type=type_str, payload=payload_dict, file_url=file_url)
 
-        if self._db_disabled and (redis_ok or disk_ok):
+        if self._db_disabled and disk_ok:
             return AnalysisArtifact(job_id=str(job_id), card_id=card_id, type=type_str, payload=payload_dict, file_url=file_url)
 
         with get_db_session() as session:
@@ -325,11 +231,6 @@ class ArtifactStore:
             session.add(artifact)
             session.flush()
             # Avoid session.refresh(): it costs an extra DB round-trip and callers do not rely on server-side defaults.
-            if not redis_ok:
-                try:
-                    self._redis_set_artifact(job_id=job_id, card_id=card_id, type=type_str, payload=payload_dict, file_url=file_url)
-                except Exception:
-                    pass
             if not disk_ok:
                 try:
                     self._disk_set_artifact(job_id=job_id, card_id=card_id, type=type_str, payload=payload_dict, file_url=file_url)
@@ -340,28 +241,10 @@ class ArtifactStore:
     def get_artifact(self, job_id: str, type: str) -> Optional[AnalysisArtifact]:
         cached = None
         try:
-            cached = self._redis_get_artifact(job_id=job_id, type=type)
-        except Exception:
-            cached = None
-        if cached is not None:
-            return cached
-
-        cached = None
-        try:
             cached = self._disk_get_artifact(job_id=job_id, type=type)
         except Exception:
             cached = None
         if cached is not None:
-            try:
-                self._redis_set_artifact(
-                    job_id=str(job_id),
-                    card_id=int(getattr(cached, "card_id", None)) if getattr(cached, "card_id", None) is not None else None,
-                    type=str(type),
-                    payload=cached.payload if isinstance(cached.payload, dict) else {},
-                    file_url=str(getattr(cached, "file_url", None)) if getattr(cached, "file_url", None) is not None else None,
-                )
-            except Exception:
-                pass
             return cached
 
         if self._db_disabled:
@@ -376,16 +259,6 @@ class ArtifactStore:
             )
 
         if artifact is not None:
-            try:
-                self._redis_set_artifact(
-                    job_id=str(job_id),
-                    card_id=int(getattr(artifact, "card_id", None)) if getattr(artifact, "card_id", None) is not None else None,
-                    type=str(type),
-                    payload=artifact.payload if isinstance(artifact.payload, dict) else {},
-                    file_url=str(getattr(artifact, "file_url", None)) if getattr(artifact, "file_url", None) is not None else None,
-                )
-            except Exception:
-                pass
             try:
                 self._disk_set_artifact(
                     job_id=str(job_id),

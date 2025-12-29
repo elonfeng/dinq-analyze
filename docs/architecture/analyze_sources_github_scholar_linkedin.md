@@ -34,9 +34,8 @@
 
 要达成“强保证 10 秒首屏”，推荐：
 - 把 DB 部署到与 runner 同地域/同机房（或同机）
-- 或启用 Redis realtime（`DINQ_REDIS_URL`）：把 `job_events` 回放与 `job_cards.output` 的增量快照维护迁到 Redis（DB 仍用于 `jobs/job_cards` 调度与 `artifacts`）
-- 并启用 Redis artifact cache（默认随 `DINQ_REDIS_URL` 生效）：`ArtifactStore.get_artifact()` 先查 Redis，避免每张派生卡都跨地域读 `artifacts.payload` 大 JSON
-- 或至少加 pgbouncer + 降低事件写入频率/批量写入（本仓库已对 event/job 写入做过降往返优化）
+- 并使用连接池/pgbouncer + 降低事件写入频率/批量写入（本仓库已对 event/job 写入做过降往返优化）
+- 对“热打开”路径，优先依赖 final_result 两级缓存（本机 SQLite L1 + 远端 DB）直接返回卡片结果
 
 ### 0.3 Scheduler 关键机制（影响“完整性/速度”）
 1) **并发组（concurrency_group）**  
@@ -141,7 +140,7 @@ flowchart TD
 | `resource.github.data` | GraphQL：GithubBundleQuery | `1`（可能因 query 内分页而多次请求） | 拉取 user + PR candidates + contributionCalendar + top repos（用于 activity/code_contribution 等） |
 
 备注：  
-- `resource.github.data` 的 bundle 目标是“减少 fan-out”，但实际请求数仍取决于 Query.process 的分页策略与返回体大小；并且该卡的 artifact 体积较大，会放大跨地域 DB 读写成本（建议配合 Redis artifact cache / 同地域 DB）。
+- `resource.github.data` 的 bundle 目标是“减少 fan-out”，但实际请求数仍取决于 Query.process 的分页策略与返回体大小；并且该卡的 artifact 体积较大，会放大跨地域 DB 读写成本（建议同地域 DB/runner）。
 
 ### 2.3 GitHub LLM 依赖图 & 调用次数
 

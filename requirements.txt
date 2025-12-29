@@ -18,6 +18,7 @@ cryptography>=3.4.0  # 用于数据库连接的加密功能
 sentry-sdk[flask]>=1.39.0  # Sentry monitoring with Flask integration
 firebase-admin>=6.2.0  # Firebase Admin SDK for authentication
 axiom-py
+nats-py>=2.6.0  # Optional: multi-process SSE backplane (NATS)
 psutil>=5.9.0  # 用于进程管理和监控
 gunicorn
 openai

@@ -18,7 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from src.models.db import AnalysisArtifactCache, AnalysisRun, AnalysisSubject
-from src.utils.db_utils import get_db_session
+from src.utils.db_utils import get_cache_db_session
 from server.utils.sqlite_cache import get_sqlite_cache
 
 
@@ -95,7 +95,7 @@ class AnalysisCacheStore:
         if not src or not key:
             raise ValueError("missing source/subject_key")
 
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             subject = (
                 session.query(AnalysisSubject)
                 .filter(AnalysisSubject.source == src, AnalysisSubject.subject_key == key)
@@ -144,7 +144,7 @@ class AnalysisCacheStore:
         now = datetime.utcnow()
         lock_ttl = self._refresh_lock_ttl_seconds()
 
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             running = (
                 session.query(AnalysisRun)
                 .filter(
@@ -206,7 +206,7 @@ class AnalysisCacheStore:
         """
 
         now = datetime.utcnow()
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             run = (
                 session.query(AnalysisRun)
                 .filter(
@@ -232,7 +232,7 @@ class AnalysisCacheStore:
         pipeline_version: str,
         options_hash: str,
     ) -> Optional[CachedRun]:
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             run = (
                 session.query(AnalysisRun)
                 .filter(
@@ -313,7 +313,7 @@ class AnalysisCacheStore:
         )
 
         now = datetime.utcnow()
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
             if art is None:
                 return None
@@ -359,7 +359,7 @@ class AnalysisCacheStore:
         )
 
         now = datetime.utcnow()
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
             if art is None or not isinstance(getattr(art, "payload", None), dict):
                 return None
@@ -432,7 +432,7 @@ class AnalysisCacheStore:
         )
         content_hash = _sha256_hex(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
             if art is None:
                 art = AnalysisArtifactCache(
@@ -481,7 +481,7 @@ class AnalysisCacheStore:
 
         content_hash = _sha256_hex(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
-        with get_db_session() as session:
+        with get_cache_db_session() as session:
             art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
             if art is None:
                 art = AnalysisArtifactCache(
@@ -539,7 +539,7 @@ class AnalysisCacheStore:
                 )
             session.flush()
 
-        # SQLite L1: store full_report snapshot for fast cache hits (no Redis).
+        # SQLite L1: store full_report snapshot for fast cache hits.
         try:
             cache = get_sqlite_cache()
             if cache is not None:
@@ -600,7 +600,25 @@ class AnalysisCacheStore:
         )
         content_hash = _sha256_hex(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
-        with get_db_session() as session:
+        # SQLite L1: store final_result snapshot for fast cache hits.
+        # Speed-first: write L1 before L2 so user-visible warm opens can hit immediately even if the DB is high RTT.
+        try:
+            cache = get_sqlite_cache()
+            if cache is not None:
+                cache.set_json(
+                    key=str(artifact_key),
+                    value={
+                        "kind": "final_result",
+                        "payload": payload,
+                        "created_at": now.isoformat(),
+                        "expires_at": expires_at.isoformat() if expires_at else None,
+                    },
+                    expires_at_s=_dt_to_epoch_seconds(expires_at),
+                )
+        except Exception:
+            pass
+
+        with get_cache_db_session() as session:
             art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
             if art is None:
                 art = AnalysisArtifactCache(
@@ -644,22 +662,5 @@ class AnalysisCacheStore:
                     "final_artifact_key": artifact_key,
                 }
             session.flush()
-
-        # SQLite L1: store final_result snapshot for fast cache hits (no Redis).
-        try:
-            cache = get_sqlite_cache()
-            if cache is not None:
-                cache.set_json(
-                    key=str(artifact_key),
-                    value={
-                        "kind": "final_result",
-                        "payload": payload,
-                        "created_at": now.isoformat(),
-                        "expires_at": expires_at.isoformat() if expires_at else None,
-                    },
-                    expires_at_s=_dt_to_epoch_seconds(expires_at),
-                )
-        except Exception:
-            pass
 
         return artifact_key
