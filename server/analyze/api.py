@@ -1029,6 +1029,7 @@ def analyze():
             {
                 "success": True,
                 "job_id": job_id,
+                "subject_key": subject_key,
                 "status": "completed",
                 "cache_hit": True,
                 "cache_stale": bool(cache_hit_stale),
@@ -1066,6 +1067,7 @@ def analyze():
             {
                 "success": True,
                 "job_id": job_id,
+                "subject_key": subject_key,
                 "status": "queued",
                 "cache_hit": bool(cache_hit_payload is not None),
                 "cache_stale": bool(cache_hit_stale) if cache_hit_payload is not None else False,
@@ -1136,6 +1138,7 @@ def analyze():
             {
                 "success": True,
                 "job_id": job_id,
+                "subject_key": subject_key,
                 "status": "completed",
                 "cache_hit": True,
                 "cache_stale": bool(cache_hit_stale),
@@ -1157,6 +1160,7 @@ def analyze():
         {
             "success": True,
             "job_id": job_id,
+            "subject_key": subject_key,
             "status": (getattr(job, "status", None) if job is not None else "queued") or "queued",
             "idempotent_replay": (not created) if idempotency_key else False,
         }
