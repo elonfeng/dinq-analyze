@@ -14,6 +14,8 @@
 推荐前端流程：
 1) `POST /api/v1/analyze`（默认 `mode=async`）
    - 若返回 `needs_confirmation=true`：展示 `candidates`，用户确认后用选中的 `candidate.input` 再发一次 create。
+   - 若返回 `status=completed` 且包含 `cards`：表示命中最终结果缓存（直出），可直接渲染并跳过快照/SSE。
+   - 若返回 `async_create=true`：表示后端已先返回 `job_id`，DB job 创建在后台进行；SSE `/stream` 会短暂等待 job 出现（前端也可对快照接口做重试/backoff）。
 2) 进入结果页后，先 `GET /api/v1/analyze/jobs/<job_id>` 初始化 UI（包含 `stream_spec`，用于“零硬编码”分段渲染）。
 3) 打开 SSE：`GET /api/v1/analyze/jobs/<job_id>/stream?after=<snapshot.last_seq>`
 4) 消费事件并更新 UI（建议前端维护 `cards[card].output={data,stream}`）：
@@ -70,6 +72,12 @@
   "cache_hit": false,             // 可选：true 表示服务端已直接用缓存完成该 job
   "cache_stale": false,           // 可选：true 表示命中的是“过期但可用”的缓存（SWR）
   "refresh_in_progress": false,   // 可选：true 表示已有其他 job 在后台刷新（当前 job 直接用 stale cache 完成）
+  "async_create": false,          // 可选：true 表示 create 先返回 job_id，DB job 在后台创建（低延迟）
+  "ephemeral_job": false,         // 可选：true 表示本次为“缓存直出”，未落 DB job（本地测试/提速用）
+  "cards": {                      // 可选：仅在 `status=completed` 的缓存直出时返回
+    "profile": { "data": { }, "stream": { } },
+    "summary": { "data": { }, "stream": { } }
+  },
   "idempotent_replay": false
 }
 ```

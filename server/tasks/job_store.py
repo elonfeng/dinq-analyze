@@ -52,6 +52,7 @@ class JobStore:
     def create_job_bundle(
         self,
         *,
+        job_id: Optional[str] = None,
         user_id: str,
         source: str,
         input_payload: Dict[str, Any],
@@ -72,7 +73,7 @@ class JobStore:
         if idempotency_key and not request_hash:
             raise ValueError("missing request_hash for idempotency key")
 
-        job_id = uuid.uuid4().hex
+        job_id = (str(job_id or "").strip() or uuid.uuid4().hex)
 
         with get_db_session() as session:
             if idempotency_key:

@@ -1,6 +1,9 @@
 """Unified analysis API."""
 from __future__ import annotations
 
+import logging
+import threading
+import uuid
 import hashlib
 import json
 import os
@@ -10,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, request, jsonify, Response, g
 from sqlalchemy import func
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from server.utils.auth import require_verified_user
 from server.analyze.freeform import is_ambiguous_input, resolve_candidates
@@ -31,12 +35,16 @@ from server.analyze.card_specs import get_stream_spec
 from server.analyze.quality_gate import GateContext, validate_card_output
 from server.analyze import rules
 from server.config.executor_mode import api_should_start_scheduler, scheduler_enabled, get_executor_mode
+from server.utils.json_clean import prune_empty
 from server.utils.sqlite_cache import get_sqlite_cache
+from server.utils.stream_protocol import create_event, format_stream_message
 from src.utils.db_utils import get_db_session
 from src.models.db import AnalysisJob, AnalysisJobCard, AnalysisJobEvent
 
 
 analyze_bp = Blueprint("analyze", __name__, url_prefix="/api")
+
+logger = logging.getLogger(__name__)
 
 _job_store = JobStore()
 _event_store = EventStore()
@@ -44,6 +52,8 @@ _artifact_store = ArtifactStore()
 _pipeline_executor = PipelineExecutor(_job_store, _artifact_store, _event_store)
 _scheduler: Optional[CardScheduler] = None
 _analysis_cache = AnalysisCacheStore()
+_async_create_executor: Optional[ThreadPoolExecutor] = None
+_async_create_executor_lock = threading.Lock()
 
 
 def _read_int_env(name: str, default: int) -> int:
@@ -61,6 +71,144 @@ def _read_bool_env(name: str, default: bool = False) -> bool:
     if raw is None:
         return bool(default)
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _async_create_job_enabled() -> bool:
+    return _read_bool_env("DINQ_ANALYZE_ASYNC_CREATE_JOB", False)
+
+
+def _cache_hit_direct_response_enabled() -> bool:
+    # Default to true when async-create is enabled, because the primary goal is "no DB writes on create".
+    return _read_bool_env("DINQ_ANALYZE_CACHE_HIT_DIRECT_RESPONSE", _async_create_job_enabled())
+
+
+def _get_async_create_executor() -> ThreadPoolExecutor:
+    global _async_create_executor
+    if _async_create_executor is not None:
+        return _async_create_executor
+    with _async_create_executor_lock:
+        if _async_create_executor is not None:
+            return _async_create_executor
+        max_workers = max(1, min(_read_int_env("DINQ_ANALYZE_ASYNC_CREATE_MAX_WORKERS", 4), 32))
+        _async_create_executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="dinq-analyze-async-create",
+        )
+        return _async_create_executor
+
+
+def _log_future_exception(task_name: str, fut: Future) -> None:
+    try:
+        exc = fut.exception()
+    except Exception:  # noqa: BLE001
+        exc = None
+    if exc is None:
+        return
+    logger.exception("%s failed: %s", task_name, exc)
+
+
+def _maybe_mark_initial_ready(plan: list[dict[str, Any]]) -> None:
+    # Mark cards with no deps as ready at creation time so runners can start immediately
+    # without requiring an extra release_ready_cards() round trip.
+    for card in plan:
+        try:
+            deps = card.get("depends_on")
+        except Exception:
+            deps = None
+        if deps is None:
+            deps_list: list[str] = []
+        elif isinstance(deps, list):
+            deps_list = [str(d).strip() for d in deps if str(d).strip()]
+        else:
+            deps_list = []
+        if not deps_list:
+            card["status"] = "ready"
+
+
+def _build_cards_from_final_cache_payload(
+    *,
+    source: str,
+    final_payload: Dict[str, Any],
+    requested_cards: Optional[list[str]],
+) -> Dict[str, Any]:
+    """
+    Convert final_result payload -> response `cards` snapshot shape:
+      { "<card_type>": { "data": <payload>, "stream": {} } }
+    """
+    src = (source or "").strip().lower()
+    cards_payload = final_payload.get("cards") if isinstance(final_payload, dict) else None
+    if not isinstance(cards_payload, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for ct in rules.normalize_cards(src, requested_cards):
+        ct_str = str(ct)
+        if ct_str == "full_report" or ct_str.startswith("resource."):
+            continue
+        raw = cards_payload.get(ct_str)
+        decision = validate_card_output(
+            source=src,
+            card_type=ct_str,
+            data=raw,
+            ctx=GateContext(source=src, card_type=ct_str, full_report=None),
+        )
+        cleaned = prune_empty(decision.normalized)
+        out[ct_str] = {"data": cleaned if cleaned is not None else decision.normalized, "stream": {}}
+    return out
+
+
+def _background_create_job_bundle(
+    *,
+    job_id: str,
+    user_id: str,
+    source: str,
+    normalized_input: Dict[str, Any],
+    requested_cards: Optional[list[str]],
+    options: Dict[str, Any],
+    subject_key: Optional[str],
+    initial_ready: bool,
+    cache_hit_payload: Optional[Dict[str, Any]],
+    cache_hit_cached_at_iso: Optional[str],
+    cache_hit_stale: bool,
+) -> None:
+    try:
+        resolved_subject_key = subject_key or resolve_subject_key(source, normalized_input)
+        plan = create_job_cards(source, requested_cards)
+        if cache_hit_payload is not None:
+            # Cache-hit completion does not need internal resource cards; skip them to reduce DB writes.
+            plan = [
+                c
+                for c in plan
+                if str((c or {}).get("card_type") or "") != "full_report"
+                and not str((c or {}).get("card_type") or "").startswith("resource.")
+            ]
+        if initial_ready:
+            _maybe_mark_initial_ready(plan)
+
+        _job_store.create_job_bundle(
+            job_id=job_id,
+            user_id=user_id,
+            source=source,
+            input_payload=normalized_input,
+            options=options or {},
+            plan=plan,
+            subject_key=resolved_subject_key or None,
+            idempotency_key=None,
+            request_hash=None,
+        )
+
+        if cache_hit_payload is not None:
+            _complete_job_from_cached_final_result(
+                job_id=job_id,
+                source=source,
+                final_payload=cache_hit_payload,
+                cached_at_iso=cache_hit_cached_at_iso,
+                stale=bool(cache_hit_stale),
+            )
+
+        if api_should_start_scheduler():
+            init_scheduler()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("async create job bundle failed (job_id=%s): %s", job_id, exc)
 
 
 def _should_persist_card_output_to_db(output: Any) -> bool:
@@ -851,6 +999,65 @@ def analyze():
         options=options_raw or {},
     ) if idempotency_key else None
 
+    # Cache-hit direct response (no DB writes): return cards immediately.
+    # This keeps create() fast even when Postgres is high RTT, and avoids the slow "complete job from cache"
+    # DB write path.
+    if mode == "async" and cache_hit_payload is not None and _cache_hit_direct_response_enabled():
+        cards_out = _build_cards_from_final_cache_payload(
+            source=source,
+            final_payload=cache_hit_payload,
+            requested_cards=requested_cards,
+        )
+        return jsonify(
+            {
+                "success": True,
+                "job_id": uuid.uuid4().hex,
+                "status": "completed",
+                "cache_hit": True,
+                "cache_stale": bool(cache_hit_stale),
+                "cache_source": cache_hit_source,
+                "ephemeral_job": True,
+                "cards": cards_out,
+                "errors": [],
+                "idempotent_replay": False,
+            }
+        )
+
+    # Async-create mode: return a job_id immediately and create the DB job bundle in background.
+    if mode == "async" and _async_create_job_enabled() and not idempotency_key:
+        job_id = uuid.uuid4().hex
+        fut = _get_async_create_executor().submit(
+            _background_create_job_bundle,
+            job_id=job_id,
+            user_id=user_id,
+            source=source,
+            normalized_input=dict(normalized_input or {}),
+            requested_cards=list(requested_cards) if requested_cards else None,
+            options=dict(options or {}),
+            subject_key=subject_key or None,
+            initial_ready=(cache_hit_payload is None),
+            cache_hit_payload=dict(cache_hit_payload) if isinstance(cache_hit_payload, dict) else None,
+            cache_hit_cached_at_iso=cache_hit_cached_at_iso,
+            cache_hit_stale=bool(cache_hit_stale),
+        )
+        fut.add_done_callback(lambda f: _log_future_exception("async_create_job_bundle", f))
+
+        if api_should_start_scheduler():
+            init_scheduler()
+
+        return jsonify(
+            {
+                "success": True,
+                "job_id": job_id,
+                "status": "queued",
+                "cache_hit": bool(cache_hit_payload is not None),
+                "cache_stale": bool(cache_hit_stale) if cache_hit_payload is not None else False,
+                "cache_source": cache_hit_source if cache_hit_payload is not None else None,
+                "async_create": True,
+                "idempotent_replay": False,
+            }
+        )
+
     try:
         job_id, created = create_analysis_job(
             user_id=user_id,
@@ -1075,11 +1282,11 @@ def stream_job(job_id: str):
     if request.method == "OPTIONS":
         return Response(status=200)
 
-    rec = _job_store.get_job(job_id)
-    if rec is None:
-        return jsonify({"success": False, "error": "job not found"}), 404
     current_user_id = getattr(g, "user_id", None)
-    if current_user_id and getattr(rec, "user_id", None) != current_user_id:
+    rec = _job_store.get_job(job_id)
+    if rec is None and not _async_create_job_enabled():
+        return jsonify({"success": False, "error": "job not found"}), 404
+    if rec is not None and current_user_id and getattr(rec, "user_id", None) != current_user_id:
         return jsonify({"success": False, "error": "job not found"}), 404
 
     after = request.args.get("after", "0")
@@ -1089,6 +1296,56 @@ def stream_job(job_id: str):
         after_seq = 0
 
     def generate():
+        nonlocal rec
+
+        # Async-create may return a job_id before the DB bundle exists. Wait briefly so the client can
+        # open SSE immediately without retrying.
+        if rec is None and _async_create_job_enabled():
+            wait_s = float(os.getenv("DINQ_ANALYZE_STREAM_WAIT_FOR_JOB_SECONDS", "10") or "10")
+            poll_s = float(os.getenv("DINQ_ANALYZE_STREAM_WAIT_FOR_JOB_POLL_SECONDS", "0.15") or "0.15")
+            poll_s = max(0.05, min(poll_s, 2.0))
+            deadline = time.monotonic() + max(0.0, wait_s)
+            last_ping = 0.0
+
+            while rec is None and time.monotonic() < deadline:
+                now = time.monotonic()
+                if (now - last_ping) >= 1.0:
+                    yield format_stream_message(
+                        create_event(
+                            source="analysis",
+                            event_type="ping",
+                            message="",
+                            step="wait_job",
+                            legacy_type="ping",
+                            payload={"job_id": job_id, "seq": 0},
+                        )
+                    )
+                    last_ping = now
+                time.sleep(poll_s)
+                rec = _job_store.get_job(job_id)
+
+        if rec is None:
+            yield format_stream_message(
+                create_event(
+                    source="analysis",
+                    event_type="job.not_found",
+                    message="job not found",
+                    payload={"job_id": job_id, "seq": 0},
+                )
+            )
+            return
+
+        if current_user_id and getattr(rec, "user_id", None) != current_user_id:
+            yield format_stream_message(
+                create_event(
+                    source="analysis",
+                    event_type="job.not_found",
+                    message="job not found",
+                    payload={"job_id": job_id, "seq": 0},
+                )
+            )
+            return
+
         # Ensure scheduler is running for non-terminal jobs (service restarts, etc.).
         if api_should_start_scheduler() and getattr(rec, "status", "") not in ("completed", "partial", "failed", "cancelled"):
             init_scheduler()
