@@ -44,6 +44,37 @@ def _first_nonempty_str(payload: Dict[str, Any], keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _strip_subject_key_prefix(source: str, value: str) -> str:
+    """
+    Allow feeding back `subject_key` values (e.g. "login:mdo") as input.content.
+
+    This supports the "frontend routes by subject_key" flow:
+      - create -> returns subject_key
+      - page URL stores subject_key
+      - reload -> call create again with input.content=subject_key
+    """
+
+    src = (source or "").strip().lower()
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    lowered = raw.lower()
+    prefix_map = {
+        "scholar": ("id:",),
+        "github": ("login:",),
+        "linkedin": ("url:",),
+        "twitter": ("username:",),
+        "openreview": ("id:",),
+        "huggingface": ("username:",),
+        "youtube": ("channel:",),
+    }
+    for p in prefix_map.get(src, ()):
+        if lowered.startswith(p):
+            return raw[len(p):].strip()
+    return raw
+
+
 def _parse_url_loose(value: str):
     raw = (value or "").strip()
     if not raw:
@@ -160,7 +191,7 @@ def normalize_input_payload(source: str, input_payload: Dict[str, Any]) -> Dict[
     keys = SOURCE_INPUT_KEYS.get(src, ("content",))
     raw = _first_nonempty_str(payload, keys)
     if raw:
-        payload["content"] = raw
+        payload["content"] = _strip_subject_key_prefix(src, raw)
 
     if not raw:
         return payload
