@@ -7,6 +7,7 @@ import logging
 import os
 import random
 import re
+import ast
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -299,18 +300,37 @@ class LLMGateway:
             return max(candidates, key=len)
 
         cleaned = _strip_code_fences(text)
-        try:
-            return json.loads(cleaned)
-        except Exception:
+        extracted = _extract_bracketed(cleaned)
+
+        def _ast_parse(s: str) -> Any:
+            t = str(s or "").strip()
+            if not t:
+                return None
+            # Best-effort: allow parsing "Python-ish JSON" outputs (single quotes, trailing commas).
+            # Convert common JSON literals to Python so ast.literal_eval can handle them.
+            t = re.sub(r"\\bnull\\b", "None", t, flags=re.IGNORECASE)
+            t = re.sub(r"\\btrue\\b", "True", t, flags=re.IGNORECASE)
+            t = re.sub(r"\\bfalse\\b", "False", t, flags=re.IGNORECASE)
             try:
-                repaired = repair_json(cleaned)
+                return ast.literal_eval(t)
+            except Exception:
+                return None
+
+        for candidate in (cleaned, extracted):
+            try:
+                return json.loads(candidate)
+            except Exception:
+                pass
+            try:
+                repaired = repair_json(candidate)
                 return json.loads(repaired)
             except Exception:
-                try:
-                    extracted = _extract_bracketed(cleaned)
-                    return json.loads(extracted)
-                except Exception:
-                    return None
+                pass
+            obj = _ast_parse(candidate)
+            if isinstance(obj, (dict, list)):
+                return obj
+
+        return None
 
     def _resolve_routes(self, *, task: Optional[str], model: Optional[str]) -> list[RouteSpec]:
         # 1) Explicit model passed by caller (supports provider:model)
