@@ -46,6 +46,7 @@ from server.analyze.resources.scholar import (
     run_scholar_page0,
 )
 from server.analyze.card_specs import get_stream_spec
+from server.utils.json_clean import prune_empty
 
 
 _GITHUB_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$")
@@ -940,6 +941,13 @@ class PipelineExecutor:
                         merged["_meta"] = dict(meta)
                     data = merged
 
+                try:
+                    cleaned = prune_empty(data)
+                    if cleaned is not None:
+                        data = cleaned
+                except Exception:
+                    pass
+
                 target_id = item.get("card_id")
                 if target_id is not None:
                     try:
@@ -956,7 +964,7 @@ class PipelineExecutor:
                     self._event_store.append_event(
                         job_id=job.id,
                         card_id=card_id_int,
-                        event_type="card.completed",
+                        event_type="card.prefill",
                         payload={
                             "card": to_card,
                             "payload": {"data": data, "stream": {}},
