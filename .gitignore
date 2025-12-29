@@ -97,20 +97,6 @@ temp/
 tmp/
 
 # Project specific
-dashboard/build/
-dashboard/node_modules/
-dashboard/.env
-dashboard/.env.local
-dashboard/.env.development.local
-dashboard/.env.test.local
-dashboard/.env.production.local
-dashboard/package-lock.json
-blog_web/package-lock.json
-blog_web/node_modules/
-blog_web/build/
-# Not part of dinq-analyze (analysis service only)
-blog_web/
-dashboard/
 # Test results
 tests/scholar_tests/results/
 tests/scholar_tests/results/**

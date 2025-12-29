@@ -397,9 +397,11 @@ def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] 
         # so this timeout needs to be reasonably large.
         return max(10, min(_read_int_env("DINQ_ANALYZE_SYNC_TIMEOUT_SECONDS", 600), 7200))
 
-    def _collect_cards_for_response() -> tuple[str, Dict[str, Any], list[Dict[str, Any]]]:
+    def _collect_cards_for_response() -> tuple[str, Optional[str], Dict[str, Any], list[Dict[str, Any]]]:
         job = _job_store.get_job(job_id)
         status = str(getattr(job, "status", "") or "") if job is not None else "unknown"
+        subject_key = str(getattr(job, "subject_key", "") or "") if job is not None else None
+        subject_key = subject_key or None
 
         cards_out: Dict[str, Any] = {}
         errs: list[Dict[str, Any]] = []
@@ -420,7 +422,7 @@ def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] 
             st = str(getattr(c, "status", "") or "")
             if st in ("failed", "timeout"):
                 errs.append({"card": ct, "status": st})
-        return status, cards_out, errs
+        return status, subject_key, cards_out, errs
 
     # In external topology, the API process must NOT execute cards (runner does that).
     # "sync" here means: wait for terminal, then return a snapshot of all cards.
@@ -435,24 +437,41 @@ def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] 
         while time.monotonic() < deadline:
             job = _job_store.get_job(job_id)
             if job is None:
-                return {"success": False, "job_id": job_id, "status": "not_found", "cards": {}, "errors": [{"error": "job not found"}]}, 404
+                return {
+                    "success": False,
+                    "source": source,
+                    "job_id": job_id,
+                    "status": "not_found",
+                    "cards": {},
+                    "errors": [{"error": "job not found"}],
+                }, 404
             if str(getattr(job, "status", "") or "") in terminal:
                 break
             time.sleep(0.15)
 
-        status, cards_out, errs = _collect_cards_for_response()
+        status, subject_key, cards_out, errs = _collect_cards_for_response()
         if status not in terminal:
             # Timed out waiting: return partial snapshot + let the client continue via SSE.
             return {
                 "success": True,
+                "source": source,
                 "job_id": job_id,
+                "subject_key": subject_key,
                 "status": status or "running",
                 "cards": cards_out,
                 "errors": errs,
                 "timeout": True,
                 "stream_url": f"/api/analyze/jobs/{job_id}/stream?after=0",
             }, 200
-        return {"success": True, "job_id": job_id, "status": status, "cards": cards_out, "errors": errs}, 200
+        return {
+            "success": True,
+            "source": source,
+            "job_id": job_id,
+            "subject_key": subject_key,
+            "status": status,
+            "cards": cards_out,
+            "errors": errs,
+        }, 200
 
     results: Dict[str, Any] = {}
     errors: list[Dict[str, Any]] = []
@@ -657,12 +676,29 @@ def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] 
     except Exception:
         pass
 
-    status, cards_out, errs = _collect_cards_for_response()
+    status, subject_key, cards_out, errs = _collect_cards_for_response()
     merged_errors = errors + [e for e in errs if e not in errors]
     if status not in terminal and time.monotonic() >= deadline:
-        return {"success": True, "job_id": job_id, "status": status or "running", "cards": cards_out, "errors": merged_errors, "timeout": True}, 200
+        return {
+            "success": True,
+            "source": source,
+            "job_id": job_id,
+            "subject_key": subject_key,
+            "status": status or "running",
+            "cards": cards_out,
+            "errors": merged_errors,
+            "timeout": True,
+        }, 200
 
-    return {"success": True, "job_id": job_id, "status": status, "cards": cards_out, "errors": merged_errors}, 200
+    return {
+        "success": True,
+        "source": source,
+        "job_id": job_id,
+        "subject_key": subject_key,
+        "status": status,
+        "cards": cards_out,
+        "errors": merged_errors,
+    }, 200
 
 
 def _complete_job_from_cached_final_result(
@@ -1028,6 +1064,7 @@ def analyze():
         return jsonify(
             {
                 "success": True,
+                "source": source,
                 "job_id": job_id,
                 "subject_key": subject_key,
                 "status": "completed",
@@ -1066,6 +1103,7 @@ def analyze():
         return jsonify(
             {
                 "success": True,
+                "source": source,
                 "job_id": job_id,
                 "subject_key": subject_key,
                 "status": "queued",
@@ -1137,6 +1175,7 @@ def analyze():
         return jsonify(
             {
                 "success": True,
+                "source": source,
                 "job_id": job_id,
                 "subject_key": subject_key,
                 "status": "completed",
@@ -1159,6 +1198,7 @@ def analyze():
     return jsonify(
         {
             "success": True,
+            "source": source,
             "job_id": job_id,
             "subject_key": subject_key,
             "status": (getattr(job, "status", None) if job is not None else "queued") or "queued",

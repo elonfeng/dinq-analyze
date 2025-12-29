@@ -289,6 +289,49 @@ class GitHubAnalyzer:
             "reasoning": "Fallback estimate based on GitHub stars, PR volume, and account age.",
         }
 
+    @staticmethod
+    def _coerce_industry_ranking(value: Any) -> Optional[float]:
+        """Normalize industry_ranking into a 0..1 percentile float."""
+        try:
+            if value is None:
+                return None
+            v = float(value)
+        except Exception:
+            return None
+
+        # Some callers may accidentally provide 25 for 25% instead of 0.25.
+        if 1.0 < v <= 100.0:
+            v = v / 100.0
+
+        if not (0.0 < v <= 1.0):
+            return None
+        return float(v)
+
+    def _normalize_valuation_and_level(self, value: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(fallback or {})
+        merged.update(value or {})
+
+        level = str(merged.get("level") or "").strip()
+        if not level or level.lower() in {"unknown", "n/a", "na"}:
+            level = str((fallback or {}).get("level") or "").strip() or "L4"
+        merged["level"] = level
+
+        salary_range = merged.get("salary_range")
+        if not (isinstance(salary_range, list) and len(salary_range) == 2):
+            merged["salary_range"] = (fallback or {}).get("salary_range") or []
+
+        industry_ranking = self._coerce_industry_ranking(merged.get("industry_ranking"))
+        if industry_ranking is None:
+            industry_ranking = self._coerce_industry_ranking((fallback or {}).get("industry_ranking"))
+        merged["industry_ranking"] = industry_ranking
+
+        if not str(merged.get("growth_potential") or "").strip():
+            merged["growth_potential"] = (fallback or {}).get("growth_potential") or ""
+        if not str(merged.get("reasoning") or "").strip():
+            merged["reasoning"] = (fallback or {}).get("reasoning") or ""
+
+        return merged
+
     def fetch_page(self, url: str) -> str:
         """获取网页内容"""
         try:
@@ -421,8 +464,7 @@ class GitHubAnalyzer:
 
     async def ai_valuation_and_level(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """生成估值和级别分析"""
-        
-
+        fallback = self._fallback_valuation_and_level(input_data)
         result = await self.ai.chat([
                 {
                     "role": "system",
@@ -502,8 +544,8 @@ class GitHubAnalyzer:
             level = str(parsed.get("level") or "").strip()
             salary_range = parsed.get("salary_range")
             if level and isinstance(salary_range, list) and len(salary_range) == 2:
-                return parsed
-        return self._fallback_valuation_and_level(input_data)
+                return self._normalize_valuation_and_level(parsed, fallback)
+        return fallback
 
     async def ai_roast(self, data: Dict[str, Any]) -> str:
         """生成幽默评价"""
@@ -697,14 +739,16 @@ class GitHubAnalyzer:
                 output["most_valuable_pull_request"] = ai_results[2] if ai_results[2] and not isinstance(ai_results[2], Exception) else None
 
                 # 根据先前的结果继续分析
+                fallback_valuation = self._fallback_valuation_and_level(output)
                 final_results = await asyncio.gather(
-                    self.safe_ai_call(self.ai_valuation_and_level(output), "valuation_and_level", {"level": "Unknown", "salary_range": "Unknown"}),
+                    self.safe_ai_call(self.ai_valuation_and_level(output), "valuation_and_level", fallback_valuation),
                     self.safe_ai_call(self.ai_role_model(output), "role_model", {"name": "Unknown", "similarity_score": 0}),
                     self.safe_ai_call(self.ai_roast(output), "roast", "No roast available"),
                     return_exceptions=True
                 )
 
-                output["valuation_and_level"] = final_results[0] if final_results[0] and not isinstance(final_results[0], Exception) else {"level": "Unknown", "salary_range": "Unknown"}
+                valuation_and_level = final_results[0] if final_results[0] and not isinstance(final_results[0], Exception) else fallback_valuation
+                output["valuation_and_level"] = self._normalize_valuation_and_level(valuation_and_level, fallback_valuation)
                 output["role_model"] = final_results[1] if final_results[1] and not isinstance(final_results[1], Exception) else {"name": "Unknown", "similarity_score": 0}
                 output["roast"] = final_results[2] if final_results[2] and not isinstance(final_results[2], Exception) else "No roast available"
 
@@ -715,7 +759,7 @@ class GitHubAnalyzer:
                 if output["feature_project"]:
                     output["feature_project"]["tags"] = []
                 output["most_valuable_pull_request"] = None
-                output["valuation_and_level"] = {"level": "Unknown", "salary_range": "Unknown"}
+                output["valuation_and_level"] = self._fallback_valuation_and_level(output)
                 output["role_model"] = {"name": "Unknown", "similarity_score": 0}
                 output["roast"] = "Analysis temporarily unavailable"
 
@@ -948,14 +992,16 @@ class GitHubAnalyzer:
 
                 # 根据先前的结果继续分析
                 safe_progress_callback('ai_advanced_start', 'Performing advanced AI analysis...')
+                fallback_valuation = self._fallback_valuation_and_level(output)
                 final_results = await asyncio.gather(
-                    self.safe_ai_call(self.ai_valuation_and_level(output), "valuation_and_level", {"level": "Unknown", "salary_range": "Unknown"}),
+                    self.safe_ai_call(self.ai_valuation_and_level(output), "valuation_and_level", fallback_valuation),
                     self.safe_ai_call(self.ai_role_model(output), "role_model", {"name": "Unknown", "similarity_score": 0}),
                     self.safe_ai_call(self.ai_roast(output), "roast", "No roast available"),
                     return_exceptions=True
                 )
 
-                output["valuation_and_level"] = final_results[0] if final_results[0] and not isinstance(final_results[0], Exception) else {"level": "Unknown", "salary_range": "Unknown"}
+                valuation_and_level = final_results[0] if final_results[0] and not isinstance(final_results[0], Exception) else fallback_valuation
+                output["valuation_and_level"] = self._normalize_valuation_and_level(valuation_and_level, fallback_valuation)
                 output["role_model"] = final_results[1] if final_results[1] and not isinstance(final_results[1], Exception) else {"name": "Unknown", "similarity_score": 0}
                 output["roast"] = final_results[2] if final_results[2] and not isinstance(final_results[2], Exception) else "No roast available"
 
@@ -969,7 +1015,7 @@ class GitHubAnalyzer:
                 if output["feature_project"]:
                     output["feature_project"]["tags"] = []
                 output["most_valuable_pull_request"] = None
-                output["valuation_and_level"] = {"level": "Unknown", "salary_range": "Unknown"}
+                output["valuation_and_level"] = self._fallback_valuation_and_level(output)
                 output["role_model"] = {"name": "Unknown", "similarity_score": 0}
                 output["roast"] = "Analysis temporarily unavailable"
 
@@ -993,6 +1039,20 @@ class GitHubAnalyzer:
                 try:
                     result = json.loads(analysis_result.result)
                     logger.info(f"Retrieved cached analysis result for user {login}")
+                    if isinstance(result, dict):
+                        try:
+                            fallback_valuation = self._fallback_valuation_and_level(result)
+                            raw_valuation = result.get("valuation_and_level") if isinstance(result.get("valuation_and_level"), dict) else {}
+                            normalized = self._normalize_valuation_and_level(raw_valuation, fallback_valuation)
+                            if result.get("valuation_and_level") != normalized:
+                                result["valuation_and_level"] = normalized
+                                try:
+                                    analysis_result.result = json.dumps(result)
+                                    self.session.commit()
+                                except Exception:
+                                    self.session.rollback()
+                        except Exception:
+                            pass
                     return result
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse cached result for {login}: {e}")
@@ -1247,6 +1307,20 @@ class GitHubAnalyzer:
                     result = json.loads(analysis_result.result)
                     logger.info(f"Retrieved cached analysis result for user {login}")
                     safe_progress('cache_hit', f'Retrieved cached result for user {login}')
+                    if isinstance(result, dict):
+                        try:
+                            fallback_valuation = self._fallback_valuation_and_level(result)
+                            raw_valuation = result.get("valuation_and_level") if isinstance(result.get("valuation_and_level"), dict) else {}
+                            normalized = self._normalize_valuation_and_level(raw_valuation, fallback_valuation)
+                            if result.get("valuation_and_level") != normalized:
+                                result["valuation_and_level"] = normalized
+                                try:
+                                    analysis_result.result = json.dumps(result)
+                                    self.session.commit()
+                                except Exception:
+                                    self.session.rollback()
+                        except Exception:
+                            pass
                     return result
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse cached result for {login}: {e}")

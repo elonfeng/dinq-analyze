@@ -16,7 +16,8 @@
    - 若返回 `needs_confirmation=true`：展示 `candidates`，用户确认后用选中的 `candidate.input` 再发一次 create。
    - 若返回 `status=completed` 且包含 `cards`：表示命中最终结果缓存（直出），可直接渲染并跳过快照/SSE。
    - 若返回 `async_create=true`：表示后端已先返回 `job_id`，DB job 创建在后台进行；SSE `/stream` 会短暂等待 job 出现（前端也可对快照接口做重试/backoff）。
-   - `subject_key` 可直接用于前端路由（唯一标识），也可在刷新/直链打开页面时作为 `input.content` 重新发起 create（后端会自动识别并解析）。
+   - `subject_key` 建议用于前端路由；注意它是 **source 作用域内唯一**，因此页面 ID 推荐用二元组：`/analyze/<source>/<subject_key>`。
+   - 刷新/直链打开页面时，可把 `subject_key` 作为 `input.content` 重新发起 create（后端会自动识别并解析）。
 2) 进入结果页后，先 `GET /api/v1/analyze/jobs/<job_id>` 初始化 UI（包含 `stream_spec`，用于“零硬编码”分段渲染）。
 3) 打开 SSE：`GET /api/v1/analyze/jobs/<job_id>/stream?after=<snapshot.last_seq>`
 4) 消费事件并更新 UI（建议前端维护 `cards[card].output={data,stream}`）：
@@ -68,6 +69,7 @@
 ```json
 {
   "success": true,
+  "source": "github",
   "job_id": "...",
   "subject_key": "...",            // 建议用它做页面唯一标识（/analyze/<source>/<subject_key>）
   "status": "queued|running|completed|partial|failed",
@@ -87,7 +89,9 @@
 ```json
 {
   "success": true,
+  "source": "github",
   "job_id": "...",
+  "subject_key": "...",
   "status": "completed",
   "cards": {
     "profile": { "data": { }, "stream": { } },
