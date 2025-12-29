@@ -482,7 +482,14 @@ class EventStore:
                         except Exception:
                             job = None
                         status = str(getattr(job, "status", "") or "").strip().lower() if job is not None else ""
-                        if status in terminal_states:
+                        # Safety: if the DB indicates there are still unseen events (job.last_seq is ahead of what
+                        # we've streamed), do NOT synthesize a terminal event. Otherwise the client would stop early
+                        # and miss business card updates.
+                        try:
+                            job_last_seq = int(getattr(job, "last_seq", 0) or 0) if job is not None else 0
+                        except Exception:  # noqa: BLE001
+                            job_last_seq = 0
+                        if status in terminal_states and (job_last_seq <= 0 or int(job_last_seq) <= int(last_seq or 0)):
                             payload = {"job_id": job_id, "seq": int(terminal_seq), "status": status}
                             yield format_stream_message(create_event(source="analysis", event_type="job.completed", message="", payload=payload))
                             last_seq = int(terminal_seq)
