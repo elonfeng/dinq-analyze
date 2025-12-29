@@ -392,16 +392,32 @@ def _scholar_summary(data: Any, ctx: GateContext) -> GateDecision:
 def _scholar_researcher_info(data: Any, ctx: GateContext) -> GateDecision:
     payload = _as_dict(data)
     name = payload.get("name")
-    scholar_id = payload.get("scholarId")
+    scholar_id = payload.get("scholarId") or payload.get("scholar_id")
     if _is_nonempty_str(name) or _is_nonempty_str(scholar_id):
-        return GateDecision(action="accept", normalized=payload)
-    if payload:
         return GateDecision(action="accept", normalized=payload)
     return GateDecision(action="retry", normalized=payload, issue=GateIssue(code="missing_identity", message="Missing scholar researcherInfo", retryable=True))
 
 
 def _scholar_block(data: Any, ctx: GateContext) -> GateDecision:
     return _retry_empty_dict(data, code="empty_block", message="Missing scholar formatted block")
+
+
+def _scholar_estimated_salary(data: Any, ctx: GateContext) -> GateDecision:
+    payload = _as_dict(data)
+    earnings = payload.get("earningsPerYearUSD")
+    try:
+        earnings_i = int(earnings) if earnings is not None and not isinstance(earnings, bool) else None
+    except Exception:
+        earnings_i = None
+    if earnings_i is not None and earnings_i > 0:
+        return GateDecision(action="accept", normalized=payload)
+    # Keep blockTitle so the UI sees a stable shape while retrying.
+    normalized = dict(payload) if payload else {"blockTitle": "Estimated Salary"}
+    return GateDecision(
+        action="retry",
+        normalized=normalized,
+        issue=GateIssue(code="missing_salary", message="Missing scholar estimated salary", retryable=True),
+    )
 
 
 def _scholar_critical_review(data: Any, ctx: GateContext) -> GateDecision:
@@ -723,7 +739,7 @@ def _register_defaults() -> None:
     register_validator("scholar", "publicationInsight", _scholar_block)
     register_validator("scholar", "roleModel", _scholar_block)
     register_validator("scholar", "closestCollaborator", _scholar_block)
-    register_validator("scholar", "estimatedSalary", _scholar_block)
+    register_validator("scholar", "estimatedSalary", _scholar_estimated_salary)
     register_validator("scholar", "researcherCharacter", _scholar_block)
     register_validator("scholar", "paperOfYear", _scholar_block)
     register_validator("scholar", "representativePaper", _scholar_block)

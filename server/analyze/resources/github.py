@@ -701,9 +701,27 @@ def fetch_github_data(
 
             # Phase-2 UX: emit repos.top_projects as early as possible from the bundle (no extra GitHub requests).
             try:
-                pr_repos = contribs.get("pullRequestContributionsByRepository")
-                if not isinstance(pr_repos, list):
-                    pr_repos = []
+                def _pr_repo_list(raw: Any) -> list[Dict[str, Any]]:
+                    if not isinstance(raw, list):
+                        return []
+                    return [x for x in raw if isinstance(x, dict)]
+
+                def _has_nonzero_prs(items: list[Dict[str, Any]]) -> bool:
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        contrib = it.get("contributions") if isinstance(it.get("contributions"), dict) else {}
+                        try:
+                            c = int(contrib.get("totalCount") or 0)
+                        except Exception:
+                            c = 0
+                        if c > 0:
+                            return True
+                    return False
+
+                pr_repos_recent = _pr_repo_list(contribs.get("pullRequestContributionsByRepository"))
+                pr_repos = pr_repos_recent
+
                 top_projects = []
                 for item in pr_repos:
                     if not isinstance(item, dict):
@@ -719,6 +737,58 @@ def fetch_github_data(
                     repo_out = dict(repo)
                     repo_out["pull_requests"] = int(pr_count)
                     top_projects.append({"pull_requests": int(pr_count), "repository": repo_out})
+
+                # If the recent-window PR repos are empty/zero, fall back to multi-year aggregation using
+                # the existing yearly query (GitHub enforces <=1y spans for contributionsCollection).
+                if not _has_nonzero_prs(pr_repos_recent):
+                    try:
+                        fallback_years = int(os.getenv("DINQ_GITHUB_TOP_PROJECTS_FALLBACK_YEARS", "10") or "10")
+                    except Exception:
+                        fallback_years = 10
+                    fallback_years = max(1, min(int(fallback_years), 10))
+                    pr_years = max(1, min(int(fallback_years), int(work_exp or 0) or 1))
+
+                    now_dt = datetime.now(timezone.utc)
+                    tasks = []
+                    for i in range(1, int(pr_years) + 1):
+                        start_year = now_dt - relativedelta(years=i)
+                        tasks.append(asyncio.create_task(github.query(MostPullRequestRepositoriesQuery(login, start_year))))
+
+                    repo_map: Dict[str, Dict[str, Any]] = {}
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for res in results:
+                        if isinstance(res, Exception):
+                            continue
+                        if not isinstance(res, list):
+                            continue
+                        for item in res:
+                            if not isinstance(item, dict):
+                                continue
+                            repo = item.get("repository") if isinstance(item.get("repository"), dict) else None
+                            if not isinstance(repo, dict) or not repo:
+                                continue
+                            url = str(repo.get("url") or "").strip()
+                            if not url:
+                                continue
+                            contrib = item.get("contributions") if isinstance(item.get("contributions"), dict) else {}
+                            try:
+                                pr_count = int(contrib.get("totalCount") or 0)
+                            except Exception:
+                                pr_count = 0
+                            if url not in repo_map:
+                                repo_out = dict(repo)
+                                repo_out["pull_requests"] = 0
+                                repo_map[url] = {"pull_requests": 0, "repository": repo_out}
+                            total = int(repo_map[url].get("pull_requests") or 0) + int(pr_count)
+                            repo_map[url]["pull_requests"] = total
+                            repo_obj = repo_map[url].get("repository")
+                            if isinstance(repo_obj, dict):
+                                repo_obj["pull_requests"] = total
+
+                    fallback_list = list(repo_map.values())
+                    fallback_list.sort(key=lambda x: int(x.get("pull_requests") or 0), reverse=True)
+                    if fallback_list:
+                        top_projects = fallback_list[:10]
                 top_projects.sort(key=lambda x: int(x.get("pull_requests") or 0), reverse=True)
                 top_projects = _with_item_ids(top_projects)
                 if top_projects:

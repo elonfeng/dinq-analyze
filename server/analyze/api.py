@@ -368,6 +368,43 @@ def _background_create_job_bundle(
     cache_hit_cached_at_iso: Optional[str],
     cache_hit_stale: bool,
 ) -> None:
+    ok = _create_job_bundle(
+        job_id=job_id,
+        user_id=user_id,
+        source=source,
+        normalized_input=normalized_input,
+        requested_cards=requested_cards,
+        options=options,
+        subject_key=subject_key,
+        initial_ready=initial_ready,
+        cache_hit_payload=cache_hit_payload,
+        cache_hit_cached_at_iso=cache_hit_cached_at_iso,
+        cache_hit_stale=cache_hit_stale,
+    )
+    if not ok:
+        logger.error("async create job bundle failed (job_id=%s)", job_id)
+
+
+def _create_job_bundle(
+    *,
+    job_id: str,
+    user_id: str,
+    source: str,
+    normalized_input: Dict[str, Any],
+    requested_cards: Optional[list[str]],
+    options: Dict[str, Any],
+    subject_key: Optional[str],
+    initial_ready: bool,
+    cache_hit_payload: Optional[Dict[str, Any]],
+    cache_hit_cached_at_iso: Optional[str],
+    cache_hit_stale: bool,
+) -> bool:
+    """
+    Create a job bundle in the DB (optionally completing it from cached final_result).
+
+    Returns False on failure so callers can avoid returning job_id that will 404.
+    """
+
     try:
         resolved_subject_key = subject_key or resolve_subject_key(source, normalized_input)
         plan = create_job_cards(source, requested_cards)
@@ -405,8 +442,10 @@ def _background_create_job_bundle(
 
         if api_should_start_scheduler():
             init_scheduler()
+        return True
     except Exception as exc:  # noqa: BLE001
-        logger.exception("async create job bundle failed (job_id=%s): %s", job_id, exc)
+        logger.exception("create job bundle failed (job_id=%s): %s", job_id, exc)
+        return False
 
 
 def _should_persist_card_output_to_db(output: Any) -> bool:
@@ -1244,12 +1283,11 @@ def analyze():
         mode == "async"
         and cache_hit_payload is not None
         and _cache_hit_direct_response_enabled()
-        and _async_create_job_enabled()
         and not idempotency_key
     ):
         job_id = uuid.uuid4().hex
-        fut = _get_async_create_executor().submit(
-            _background_create_job_bundle,
+
+        ok = _create_job_bundle(
             job_id=job_id,
             user_id=user_id,
             source=source,
@@ -1262,10 +1300,8 @@ def analyze():
             cache_hit_cached_at_iso=cache_hit_cached_at_iso,
             cache_hit_stale=bool(cache_hit_stale),
         )
-        fut.add_done_callback(lambda f: _log_future_exception("async_create_job_bundle_cache_hit", f))
-
-        if api_should_start_scheduler():
-            init_scheduler()
+        if not ok:
+            return jsonify({"success": False, "error": "failed to create cached job bundle"}), 500
 
         cards_out = _build_cards_from_final_cache_payload(
             source=source,
@@ -1282,7 +1318,7 @@ def analyze():
                 "cache_hit": True,
                 "cache_stale": bool(cache_hit_stale),
                 "cache_source": cache_hit_source,
-                "async_create": True,
+                "async_create": False,
                 "cards": cards_out,
                 "errors": [],
                 "idempotent_replay": False,
