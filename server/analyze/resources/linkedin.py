@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import requests
 
 from server.utils.timing import elapsed_ms, now_perf
+from server.config.llm_models import get_model
 from server.llm.gateway import openrouter_chat
 
 
@@ -161,6 +162,44 @@ def fetch_linkedin_raw_profile(
     resolved_name = raw_profile.get("fullName") or resolved_name
     linkedin_id = analyzer.generate_linkedin_id(resolved_name, resolved_url)
 
+    # NOTE: The Apify blob can be large and is not required by the frontend contract.
+    # Keep the UI-facing lists in `work_experience`/`education`, and store a pruned raw_profile
+    # without duplicating experiences/educations.
+    work_experience = raw_profile.get("experiences", []) or []
+    education = raw_profile.get("educations", []) or []
+
+    def _prune_for_storage(profile: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(profile, dict) or not profile:
+            return {}
+        keep_keys = {
+            # Identity + UI hints
+            "fullName",
+            "name",
+            "profilePic",
+            "headline",
+            "occupation",
+            "jobTitle",
+            "location",
+            "addressWithCountry",
+            "companyName",
+            "companyIndustry",
+            "connections",
+            "followers",
+            "about",
+            # Useful for LLM compaction (small-ish)
+            "skills",
+        }
+        out: Dict[str, Any] = {}
+        for k in keep_keys:
+            if profile.get(k) is not None:
+                out[k] = profile.get(k)
+        # Safety fallback: if the whitelist misses everything, still drop the biggest duplicated lists.
+        if not out:
+            out = {k: v for k, v in profile.items() if k not in ("experiences", "educations")}
+        return out
+
+    raw_profile_store = _prune_for_storage(raw_profile)
+
     report = {
         "_linkedin_url": resolved_url,
         "_linkedin_id": linkedin_id,
@@ -168,9 +207,9 @@ def fetch_linkedin_raw_profile(
             "avatar": raw_profile.get("profilePic"),
             "name": resolved_name,
             "about": raw_profile.get("about") or "",
-            "work_experience": raw_profile.get("experiences", []) or [],
-            "education": raw_profile.get("educations", []) or [],
-            "raw_profile": raw_profile,
+            "work_experience": work_experience,
+            "education": education,
+            "raw_profile": raw_profile_store,
         },
     }
     return report
@@ -384,6 +423,16 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     raw_profile = profile_data.get("raw_profile")
     if not isinstance(raw_profile, dict) or not raw_profile:
         raise ValueError("missing raw_profile for linkedin enrich bundle")
+
+    # raw_profile may be pruned for storage; reconstruct required lists for downstream heuristics + LLM.
+    work_experience = profile_data.get("work_experience") if isinstance(profile_data.get("work_experience"), list) else []
+    education = profile_data.get("education") if isinstance(profile_data.get("education"), list) else []
+    if work_experience and (not isinstance(raw_profile.get("experiences"), list) or not raw_profile.get("experiences")):
+        raw_profile = dict(raw_profile)
+        raw_profile["experiences"] = work_experience
+    if education and (not isinstance(raw_profile.get("educations"), list) or not raw_profile.get("educations")):
+        raw_profile = dict(raw_profile)
+        raw_profile["educations"] = education
 
     person_name = str(profile_data.get("name") or raw_profile.get("fullName") or "Unknown").strip() or "Unknown"
 

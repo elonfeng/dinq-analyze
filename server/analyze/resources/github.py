@@ -372,8 +372,14 @@ def fetch_github_preview(*, login: str, progress: Optional[ProgressFn] = None, u
                     except Exception:
                         count = 0
                     if url not in repo_map:
-                        repo_map[url] = {"pull_requests": 0, "repository": repo}
-                    repo_map[url]["pull_requests"] = int(repo_map[url].get("pull_requests") or 0) + int(count)
+                        repo_out = dict(repo)
+                        repo_out["pull_requests"] = 0
+                        repo_map[url] = {"pull_requests": 0, "repository": repo_out}
+                    total = int(repo_map[url].get("pull_requests") or 0) + int(count)
+                    repo_map[url]["pull_requests"] = total
+                    repo_obj = repo_map[url].get("repository")
+                    if isinstance(repo_obj, dict):
+                        repo_obj["pull_requests"] = total
 
             def _sorted_top_projects() -> list[Dict[str, Any]]:
                 items = list(repo_map.values())
@@ -710,7 +716,9 @@ def fetch_github_data(
                         pr_count = int(contrib.get("totalCount") or 0)
                     except Exception:
                         pr_count = 0
-                    top_projects.append({"pull_requests": int(pr_count), "repository": repo})
+                    repo_out = dict(repo)
+                    repo_out["pull_requests"] = int(pr_count)
+                    top_projects.append({"pull_requests": int(pr_count), "repository": repo_out})
                 top_projects.sort(key=lambda x: int(x.get("pull_requests") or 0), reverse=True)
                 top_projects = _with_item_ids(top_projects)
                 if top_projects:
@@ -734,7 +742,9 @@ def fetch_github_data(
                     for repo in top_repos[:10]:
                         if not isinstance(repo, dict) or not repo:
                             continue
-                        fallback.append({"pull_requests": 0, "repository": repo})
+                        repo_out = dict(repo)
+                        repo_out["pull_requests"] = 0
+                        fallback.append({"pull_requests": 0, "repository": repo_out})
                     fallback = _with_item_ids(fallback)
                     top_projects = fallback or top_projects
                 output["top_projects"] = top_projects

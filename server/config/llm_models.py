@@ -74,8 +74,8 @@ _BUILTIN_TASK_MODEL_OVERRIDES = {
     # Strict JSON bundles: Groq 8B is extremely fast and passes schema in bench.
     "github_enrich_bundle": "groq:llama-3.1-8b-instant",
     "scholar_level_fast": "groq:llama-3.1-8b-instant",
-    # Strict JSON with larger output: Gemini Flash is more stable in bench.
-    "linkedin_enrich_bundle": "google/gemini-2.5-flash",
+    # Strict JSON with larger output: prefer Groq first (speed); can be overridden by env.
+    "linkedin_enrich_bundle": "groq:llama-3.1-8b-instant",
     "github_best_pr": "google/gemini-2.5-flash",
     # Text / roast tasks: keep on Gemini Flash-Lite (very low latency for short outputs).
     "linkedin_roast": "google/gemini-2.5-flash-lite",

@@ -569,19 +569,29 @@ def _linkedin_career(data: Any, ctx: GateContext) -> GateDecision:
 
     # Cross-check raw profile when available: if raw contains experiences/educations but output is empty, retry.
     raw_profile: Dict[str, Any] = {}
+    prof_for_check: Dict[str, Any] = {}
     if isinstance(ctx.full_report, dict):
         prof = ctx.full_report.get("profile_data")
-        if isinstance(prof, dict) and isinstance(prof.get("raw_profile"), dict):
-            raw_profile = prof.get("raw_profile") or {}
-    if not raw_profile:
+        if isinstance(prof, dict):
+            prof_for_check = prof
+            if isinstance(prof.get("raw_profile"), dict):
+                raw_profile = prof.get("raw_profile") or {}
+    if not prof_for_check:
         art = ctx.artifacts.get("resource.linkedin.raw_profile")
         if isinstance(art, dict):
             prof = art.get("profile_data")
-            if isinstance(prof, dict) and isinstance(prof.get("raw_profile"), dict):
-                raw_profile = prof.get("raw_profile") or {}
+            if isinstance(prof, dict):
+                prof_for_check = prof
+                if isinstance(prof.get("raw_profile"), dict):
+                    raw_profile = prof.get("raw_profile") or {}
 
-    raw_exp = raw_profile.get("experiences") if isinstance(raw_profile.get("experiences"), list) else []
-    raw_edu = raw_profile.get("educations") if isinstance(raw_profile.get("educations"), list) else []
+    # Prefer the normalized lists from profile_data (raw_profile may be pruned for storage).
+    raw_exp = prof_for_check.get("work_experience") if isinstance(prof_for_check.get("work_experience"), list) else []
+    raw_edu = prof_for_check.get("education") if isinstance(prof_for_check.get("education"), list) else []
+    if not raw_exp:
+        raw_exp = raw_profile.get("experiences") if isinstance(raw_profile.get("experiences"), list) else []
+    if not raw_edu:
+        raw_edu = raw_profile.get("educations") if isinstance(raw_profile.get("educations"), list) else []
 
     if raw_exp and not normalized["work_experience"]:
         return GateDecision(action="retry", normalized=normalized, issue=GateIssue(code="missing_work_experience", message="Missing work experience extraction", retryable=True, details={"raw_experiences": len(raw_exp)}))

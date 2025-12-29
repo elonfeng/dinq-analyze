@@ -1900,7 +1900,17 @@ class PipelineExecutor:
                         from server.linkedin_analyzer.roast_service import get_linkedin_roast
 
                         progress("ai_roast", "Generating roast...", None)
-                        roast = get_linkedin_roast(raw_profile, person_name)
+                        roast_profile = raw_profile
+                        # raw_profile may be pruned for storage; restore experience/education lists for the roast prompt.
+                        exp = profile_data.get("work_experience") if isinstance(profile_data.get("work_experience"), list) else []
+                        edu = profile_data.get("education") if isinstance(profile_data.get("education"), list) else []
+                        if exp and (not isinstance(roast_profile.get("experiences"), list) or not roast_profile.get("experiences")):
+                            roast_profile = dict(roast_profile)
+                            roast_profile["experiences"] = exp
+                        if edu and (not isinstance(roast_profile.get("educations"), list) or not roast_profile.get("educations")):
+                            roast_profile = dict(roast_profile)
+                            roast_profile["educations"] = edu
+                        roast = get_linkedin_roast(roast_profile, person_name)
                         return roast
 
                     if ct == "summary":

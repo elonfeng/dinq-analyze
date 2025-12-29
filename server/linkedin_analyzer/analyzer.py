@@ -520,9 +520,13 @@ class LinkedInAnalyzer:
                 logger.error("No dataset ID found in run result")
                 return None
             
-            # Fetch the actual data from the dataset
+            # Fetch the actual data from the dataset.
+            # Only need the first item (profile), avoid pulling full pages when the dataset is large.
             dataset = self.apifyclient.dataset(dataset_id)
-            items = dataset.list_items().items
+            try:
+                items = dataset.list_items(limit=1).items
+            except Exception:
+                items = dataset.list_items().items
             
             if not items:
                 logger.error("No items found in dataset")
