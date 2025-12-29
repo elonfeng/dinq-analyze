@@ -313,6 +313,35 @@ def estimate_scholar_level_fast(
     earnings = str(merged.get("earnings") or "").strip()
     if not earnings or earnings.lower() in ("n/a", "na", "unknown", "none"):
         merged["earnings"] = base.get("earnings")
+    else:
+        # Some models return qualitative text ("competitive") which breaks downstream USD parsing.
+        if not any(ch.isdigit() for ch in earnings):
+            merged["earnings"] = base.get("earnings")
+
+    def _norm_level_us(raw: Any, fallback: Any) -> Any:
+        s = str(raw or "").strip().upper().replace(" ", "")
+        if s.startswith("L") and len(s) > 1 and s[1:].isdigit():
+            try:
+                n = int(s[1:])
+            except Exception:
+                n = 0
+            if 3 <= n <= 8:
+                return f"L{n}"
+        return fallback
+
+    def _norm_level_cn(raw: Any, fallback: Any) -> Any:
+        s = str(raw or "").strip().upper().replace(" ", "")
+        if s.startswith("P") and len(s) > 1 and s[1:].isdigit():
+            try:
+                n = int(s[1:])
+            except Exception:
+                n = 0
+            if 3 <= n <= 12:
+                return f"P{n}"
+        return fallback
+
+    merged["level_us"] = _norm_level_us(merged.get("level_us"), base.get("level_us"))
+    merged["level_cn"] = _norm_level_cn(merged.get("level_cn"), base.get("level_cn"))
 
     return merged
 
