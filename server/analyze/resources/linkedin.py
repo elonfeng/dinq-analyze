@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -493,6 +494,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                 "skills": "Return 3-6 items per list; use concise noun phrases.",
                 "career": "Keep advice specific and actionable; avoid generic clichés.",
                 "summaries": "work_experience_summary 40-60 words; education_summary 30-50 words.",
+                "money": "Return plausible but competitive ranges; follow schema strictly; explanation 50-70 words.",
                 "about": "If profile.about is empty, generate a 40-60 word first-person about section.",
                 "tags": "Return 4-6 personal_tags (Title Case).",
             },
@@ -514,6 +516,13 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                 },
                 "work_experience_summary": "string",
                 "education_summary": "string",
+                "money": {
+                    "years_of_experience": {"years": 0, "start_year": 0, "calculation_basis": "string"},
+                    "level_us": "string",
+                    "level_cn": "string",
+                    "estimated_salary": "string",
+                    "explanation": "string",
+                },
                 "summary": {"about": "string", "personal_tags": ["string"]},
             },
         },
@@ -588,7 +597,43 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
 
             money = create_default_money_analysis(raw_profile, person_name)
         except Exception:
-            money = {"estimated_salary": "Unknown", "explanation": "Unavailable"}
+            money = {}
+
+    def _normalize_money(m: Any) -> Dict[str, Any]:
+        payload = m if isinstance(m, dict) else {}
+
+        years = payload.get("years_of_experience")
+        if not isinstance(years, dict):
+            years = {}
+
+        level_us = payload.get("level_us")
+        level_cn = payload.get("level_cn")
+        estimated_salary = payload.get("estimated_salary")
+        explanation = payload.get("explanation")
+
+        # Backward-compatible mapping (older fallbacks used earnings/justification).
+        if not estimated_salary:
+            estimated_salary = payload.get("earnings") or payload.get("salary_range") or payload.get("total_compensation")
+        if not explanation:
+            explanation = payload.get("justification") or payload.get("reasoning")
+
+        salary_s = str(estimated_salary or "").strip()
+        if salary_s:
+            salary_s = salary_s.replace(",", "").replace("$", "").strip()
+            salary_s = re.sub(r"(?i)\\busd\\b", "", salary_s).strip()
+            salary_s = salary_s.replace("–", "-").replace("—", "-").replace("~", "-").replace("〜", "-").replace("～", "-")
+            salary_s = re.sub(r"(?i)\\s+to\\s+", "-", salary_s).strip()
+        expl_s = str(explanation or "").strip()
+
+        return {
+            "years_of_experience": years,
+            "level_us": level_us,
+            "level_cn": level_cn,
+            "estimated_salary": salary_s,
+            "explanation": expl_s,
+        }
+
+    money = _normalize_money(money)
 
     # Best-effort: if model fails to produce any skills lists, provide a minimal placeholder list
     # so the card completes (quality gate accepts fallback meta if needed downstream).
@@ -735,6 +780,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         "work_experience_summary": work_summary,
         "education_summary": edu_summary,
         "money": money,
+        "money_analysis": money,
         "summary": {"about": about, "personal_tags": personal_tags},
         "role_model": role_model,
     }
