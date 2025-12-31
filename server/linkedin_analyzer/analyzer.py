@@ -505,7 +505,7 @@ class LinkedInAnalyzer:
                 ] }
 
             # Run the Actor and wait for it to finish
-            run = self.apifyclient.actor("2SyF0bVxmgGr8IVCZ").call(run_input=run_input)
+            run = self.apifyclient.actor("2SyF0bVxmgGr8IVCZ").call(run_input=run_input, logger=None)
             
             logger.info(f"Apify run completed with status: {run.get('status')}")
             
