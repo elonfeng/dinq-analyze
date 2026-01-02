@@ -1191,12 +1191,35 @@ class PipelineExecutor:
                     preview_art = self._artifact_store.get_artifact(job.id, "resource.linkedin.preview")
                     linkedin_url = None
                     person_name = None
+                    apify_full_run_id = None
+                    apify_full_dataset_id = None
+                    apify_lite_run_id = None
+                    apify_lite_dataset_id = None
                     if preview_art is not None and isinstance(preview_art.payload, dict):
                         linkedin_url = preview_art.payload.get("_linkedin_url")
                         profile_data = preview_art.payload.get("profile_data")
                         if isinstance(profile_data, dict):
                             person_name = profile_data.get("name")
-                    payload = fetch_linkedin_raw_profile(content=content, progress=progress, linkedin_url=linkedin_url, person_name=person_name)
+                        apify = preview_art.payload.get("_apify")
+                        if isinstance(apify, dict):
+                            lite = apify.get("lite")
+                            full = apify.get("full")
+                            if isinstance(lite, dict):
+                                apify_lite_run_id = lite.get("run_id")
+                                apify_lite_dataset_id = lite.get("dataset_id")
+                            if isinstance(full, dict):
+                                apify_full_run_id = full.get("run_id")
+                                apify_full_dataset_id = full.get("dataset_id")
+                    payload = fetch_linkedin_raw_profile(
+                        content=content,
+                        progress=progress,
+                        linkedin_url=linkedin_url,
+                        person_name=person_name,
+                        apify_full_run_id=apify_full_run_id,
+                        apify_full_dataset_id=apify_full_dataset_id,
+                        apify_lite_run_id=apify_lite_run_id,
+                        apify_lite_dataset_id=apify_lite_dataset_id,
+                    )
                     self._artifact_store.save_artifact(job_id=job.id, card_id=card.id, type=card_type, payload=payload)
                     return payload
 

@@ -107,11 +107,25 @@ def fetch_linkedin_preview(*, content: str, progress: Optional[ProgressFn] = Non
     Does NOT perform the long-tail raw scraping step.
     """
 
-    from server.api.linkedin_analyzer_api import get_linkedin_analyzer  # local import (heavy)
-
-    analyzer = get_linkedin_analyzer()
     t0 = now_perf()
-    linkedin_url, person_name = _resolve_url_and_name(analyzer, content, progress)
+
+    raw = str(content or "").strip()
+    if "linkedin.com" in raw:
+        linkedin_url = _canonicalize_linkedin_url(raw)
+        person_name = _infer_name_from_linkedin_url(linkedin_url) or linkedin_url
+
+        # Match LinkedInAnalyzer.generate_linkedin_id() semantics for cache keys.
+        if "linkedin.com/in/" in linkedin_url:
+            linkedin_id = linkedin_url.split("linkedin.com/in/")[1].split("?")[0].split("/")[0]
+        else:
+            linkedin_id = f"name:{person_name.lower().replace(' ', '_')}"
+    else:
+        from server.api.linkedin_analyzer_api import get_linkedin_analyzer  # local import (heavy; only needed for name->url)
+
+        analyzer = get_linkedin_analyzer()
+        linkedin_url, person_name = _resolve_url_and_name(analyzer, content, progress)
+        linkedin_id = analyzer.generate_linkedin_id(person_name, linkedin_url)
+
     _emit(progress, "timing.linkedin.resolve", "Resolved LinkedIn identity", {"duration_ms": elapsed_ms(t0)})
 
     try:
@@ -143,10 +157,60 @@ def fetch_linkedin_preview(*, content: str, progress: Optional[ProgressFn] = Non
     except Exception:
         pass
 
-    linkedin_id = analyzer.generate_linkedin_id(person_name, linkedin_url)
+    apify_full_run_id = ""
+    apify_full_dataset_id = ""
+    apify_lite_run_id = ""
+    apify_lite_dataset_id = ""
+
+    # Kick off Apify runs as early as possible (preview is the first LinkedIn DAG card).
+    # The downstream raw_profile card can reuse these run IDs and emit lite prefill faster.
+    try:
+        from apify_client import ApifyClient
+
+        token = str(os.getenv("APIFY_API_KEY") or "").strip()
+        apify_client = ApifyClient(token) if token else None
+    except Exception:
+        apify_client = None
+
+    if apify_client is not None and isinstance(linkedin_url, str) and linkedin_url.strip():
+        # Lite first for fast UI prefill.
+        try:
+            run = apify_client.actor(_APIFY_LINKEDIN_LITE_ACTOR_ID).start(
+                run_input={"username": linkedin_url, "includeEmail": False},
+                wait_for_finish=0,
+            )
+            if isinstance(run, dict):
+                apify_lite_run_id = str(run.get("id") or "").strip()
+                apify_lite_dataset_id = str(run.get("defaultDatasetId") or "").strip()
+        except Exception:
+            pass
+
+        try:
+            run = apify_client.actor(_APIFY_LINKEDIN_FULL_ACTOR_ID).start(
+                run_input={"profileUrls": [linkedin_url]},
+                wait_for_finish=0,
+            )
+            if isinstance(run, dict):
+                apify_full_run_id = str(run.get("id") or "").strip()
+                apify_full_dataset_id = str(run.get("defaultDatasetId") or "").strip()
+        except Exception:
+            pass
+
     return {
         "_linkedin_url": linkedin_url,
         "_linkedin_id": linkedin_id,
+        "_apify": {
+            "lite": {
+                "actor_id": _APIFY_LINKEDIN_LITE_ACTOR_ID,
+                "run_id": apify_lite_run_id or None,
+                "dataset_id": apify_lite_dataset_id or None,
+            },
+            "full": {
+                "actor_id": _APIFY_LINKEDIN_FULL_ACTOR_ID,
+                "run_id": apify_full_run_id or None,
+                "dataset_id": apify_full_dataset_id or None,
+            },
+        },
         "profile_data": {
             "avatar": "",
             "name": person_name,
@@ -163,6 +227,10 @@ def fetch_linkedin_raw_profile(
     progress: Optional[ProgressFn] = None,
     linkedin_url: Optional[str] = None,
     person_name: Optional[str] = None,
+    apify_full_run_id: Optional[str] = None,
+    apify_full_dataset_id: Optional[str] = None,
+    apify_lite_run_id: Optional[str] = None,
+    apify_lite_dataset_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Fetch raw LinkedIn profile data and return a partial full_report-like dict.
@@ -183,34 +251,38 @@ def fetch_linkedin_raw_profile(
     if not resolved_name:
         resolved_name = resolved_url if "linkedin.com" in resolved_url else (content or "").strip() or "Unknown"
     _emit(progress, "timing.linkedin.resolve", "Resolved LinkedIn identity", {"duration_ms": elapsed_ms(t0)})
-    try:
-        _emit(
-            progress,
-            "preview.linkedin.profile",
-            "LinkedIn profile preview ready (fetching raw profile in background)",
-            {
-                "prefill_cards": [
-                    {
-                        "card": "profile",
-                        "data": {
-                            "avatar": "",
-                            "name": resolved_name,
-                            "about": "",
-                            "work_experience": [],
-                            "education": [],
-                        },
-                        "meta": {
-                            "partial": True,
-                            "degraded": True,
-                            "reason": "fetching_raw_profile",
-                            "candidate_url": resolved_url,
-                        },
-                    }
-                ]
-            },
-        )
-    except Exception:
-        pass
+    # Avoid duplicate degraded prefill: resource.linkedin.preview already emits the placeholder.
+    # Keep backward-compat for callers that invoke raw_profile directly (no preview artifact).
+    upstream_prefilled = bool(str(linkedin_url or "").strip() and str(person_name or "").strip())
+    if not upstream_prefilled:
+        try:
+            _emit(
+                progress,
+                "preview.linkedin.profile",
+                "LinkedIn profile preview ready (fetching raw profile in background)",
+                {
+                    "prefill_cards": [
+                        {
+                            "card": "profile",
+                            "data": {
+                                "avatar": "",
+                                "name": resolved_name,
+                                "about": "",
+                                "work_experience": [],
+                                "education": [],
+                            },
+                            "meta": {
+                                "partial": True,
+                                "degraded": True,
+                                "reason": "fetching_raw_profile",
+                                "candidate_url": resolved_url,
+                            },
+                        }
+                    ]
+                },
+            )
+        except Exception:
+            pass
 
     _emit(progress, "fetching", "Fetching LinkedIn profile details...", None)
     t1 = now_perf()
@@ -398,15 +470,29 @@ def fetch_linkedin_raw_profile(
         run_input_lite = _run_input_lite(resolved_url)
         full_run = None
         lite_run = None
-        try:
-            full_run = apify_client.actor(full_actor_id).start(run_input=run_input_full, wait_for_finish=0)
-        except Exception:
-            full_run = None
+
+        # Reuse Apify runs started by the preview card (best-effort).
+        pref_full_run_id = str(apify_full_run_id or "").strip()
+        pref_full_dataset_id = str(apify_full_dataset_id or "").strip()
+        if pref_full_run_id and pref_full_dataset_id:
+            full_run = {"id": pref_full_run_id, "defaultDatasetId": pref_full_dataset_id}
+
+        pref_lite_run_id = str(apify_lite_run_id or "").strip()
+        pref_lite_dataset_id = str(apify_lite_dataset_id or "").strip()
+        if pref_lite_dataset_id:
+            lite_run = {"id": pref_lite_run_id, "defaultDatasetId": pref_lite_dataset_id}
+
         if lite_actor_id:
+            if not (isinstance(lite_run, dict) and lite_run.get("defaultDatasetId")):
+                try:
+                    lite_run = apify_client.actor(lite_actor_id).start(run_input=run_input_lite, wait_for_finish=0)
+                except Exception:
+                    lite_run = None
+        if not (isinstance(full_run, dict) and full_run.get("id") and full_run.get("defaultDatasetId")):
             try:
-                lite_run = apify_client.actor(lite_actor_id).start(run_input=run_input_lite, wait_for_finish=0)
+                full_run = apify_client.actor(full_actor_id).start(run_input=run_input_full, wait_for_finish=0)
             except Exception:
-                lite_run = None
+                full_run = None
 
         if not isinstance(full_run, dict) or not full_run.get("id") or not full_run.get("defaultDatasetId"):
             # Fallback: old path (single full call).
