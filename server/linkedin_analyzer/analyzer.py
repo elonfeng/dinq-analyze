@@ -10,6 +10,9 @@ from typing import Any, Optional, Dict, List
 from server.llm.gateway import openrouter_chat
 from server.config.llm_models import get_model
 
+# Apify actor used for full LinkedIn profile scraping (no cookies).
+_APIFY_LINKEDIN_FULL_ACTOR_ID = "2SyF0bVxmgGr8IVCZ"  # dev_fusion/Linkedin-Profile-Scraper
+
 # Try to use DINQ project's trace logging system
 try:
     from server.utils.trace_context import get_trace_logger
@@ -51,18 +54,27 @@ class LinkedInAnalyzer:
         self.use_cache = config.get("use_cache", True)
         self.cache_max_age_days = config.get("cache_max_age_days", 7)
         
-        # Initialize Tavily client
+        # Initialize Tavily client (optional)
+        self.tvly_client = None
         try:
             from tavily import TavilyClient
+
             tavily_key = os.getenv("TAVILY_API_KEY", "")
             self.tvly_client = TavilyClient(tavily_key) if tavily_key else None
             if self.tvly_client is not None:
                 logger.info("Tavily client initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Tavily client: {e}")
+            self.tvly_client = None
+
+        # Initialize Apify client (optional, but required for LinkedIn scraping)
+        self.apifyclient = None
+        try:
             from apify_client import ApifyClient
+
             self.apifyclient = ApifyClient(self.apify_api_key) if self.apify_api_key else None
         except Exception as e:
-            logger.error(f"Failed to initialize Tavily client: {e}")
-            self.tvly_client = None
+            logger.error(f"Failed to initialize Apify client: {e}")
             self.apifyclient = None
 
     def convert_datetime_for_json(self, obj):
@@ -500,12 +512,14 @@ class LinkedInAnalyzer:
                 logger.error(f"Invalid LinkedIn URL: {linkedin_url}")
                 return None
                 
-            run_input = { "profileUrls": [
-                    linkedin_url
-                ] }
+            if self.apifyclient is None:
+                logger.error("Apify client not available (missing APIFY_API_KEY?)")
+                return None
+
+            run_input = {"profileUrls": [linkedin_url]}
 
             # Run the Actor and wait for it to finish
-            run = self.apifyclient.actor("2SyF0bVxmgGr8IVCZ").call(run_input=run_input, logger=None)
+            run = self.apifyclient.actor(_APIFY_LINKEDIN_FULL_ACTOR_ID).call(run_input=run_input, logger=None)
             
             logger.info(f"Apify run completed with status: {run.get('status')}")
             

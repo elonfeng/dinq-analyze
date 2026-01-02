@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -14,10 +16,65 @@ from server.llm.gateway import openrouter_chat
 
 ProgressFn = Callable[[str, str, Optional[Dict[str, Any]]], None]
 
+# Hardcoded Apify actor IDs (per ops requirement: no env-configurable actor ids).
+_APIFY_LINKEDIN_FULL_ACTOR_ID = "2SyF0bVxmgGr8IVCZ"  # dev_fusion/Linkedin-Profile-Scraper
+_APIFY_LINKEDIN_LITE_ACTOR_ID = "VhxlqQXRwhW8H5hNV"  # apimaestro/linkedin-profile-detail
+
+# Timeouts for scraping. Keep constants to avoid env sprawl; adjust in code if needed.
+_APIFY_LINKEDIN_LITE_PREFILL_TIMEOUT_S = 7.0  # How long we wait for a lite dataset item before aborting.
+_APIFY_LINKEDIN_FULL_TIMEOUT_S = 90.0  # Global guard for the full scrape.
+
 
 def _emit(progress: Optional[ProgressFn], step: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
     if progress:
         progress(step, message, data)
+
+
+def _canonicalize_linkedin_url(url: str) -> str:
+    """
+    Normalize LinkedIn URLs for downstream scrapers (some actors are picky about domains/params).
+
+    - Force https
+    - Drop query/fragment
+    - Normalize regional domains (e.g. ca.linkedin.com -> www.linkedin.com)
+    """
+
+    raw = str(url or "").strip()
+    if not raw:
+        return raw
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    if not re.match(r"^https?://", raw, flags=re.IGNORECASE):
+        raw = "https://" + raw
+    raw = re.sub(r"^http://", "https://", raw, flags=re.IGNORECASE)
+
+    try:
+        parts = urlsplit(raw)
+        netloc = parts.netloc.lower()
+        if netloc == "linkedin.com":
+            netloc = "www.linkedin.com"
+        if netloc.endswith(".linkedin.com") and netloc != "www.linkedin.com":
+            netloc = "www.linkedin.com"
+        cleaned = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+        return cleaned.rstrip("/") if cleaned.endswith("/") else cleaned
+    except Exception:
+        return raw
+
+
+def _infer_name_from_linkedin_url(url: str) -> str:
+    cleaned = _canonicalize_linkedin_url(url)
+    m = re.search(r"linkedin\\.com/(?:in|company)/([^/?#]+)", cleaned, flags=re.IGNORECASE)
+    if not m:
+        return ""
+    slug = (m.group(1) or "").strip()
+    if not slug:
+        return ""
+    parts = [p for p in slug.split("-") if p]
+    if parts and re.search(r"\d", parts[-1]):
+        parts = parts[:-1]
+    if not parts:
+        return slug
+    return " ".join([p[:1].upper() + p[1:] for p in parts if p]).strip()
 
 
 def _resolve_url_and_name(analyzer, content: str, progress: Optional[ProgressFn]) -> Tuple[str, str]:
@@ -26,14 +83,16 @@ def _resolve_url_and_name(analyzer, content: str, progress: Optional[ProgressFn]
         raise ValueError("missing linkedin input")
 
     if "linkedin.com" in raw:
-        return raw, raw
+        url = _canonicalize_linkedin_url(raw)
+        inferred = _infer_name_from_linkedin_url(url)
+        return url, inferred or url
 
     person_name = raw
     _emit(progress, "searching", f"Searching LinkedIn URL for {person_name}...", None)
     results = analyzer.search_linkedin_url(person_name)
     if not results:
         raise ValueError(f'No LinkedIn profile found for "{person_name}"')
-    url = str(results[0].get("url") or "").strip()
+    url = _canonicalize_linkedin_url(str(results[0].get("url") or "").strip())
     if not url:
         raise ValueError(f'No LinkedIn URL found for "{person_name}"')
     return url, person_name
@@ -120,6 +179,7 @@ def fetch_linkedin_raw_profile(
     resolved_name = str(person_name or "").strip() if person_name else ""
     if not resolved_url:
         resolved_url, resolved_name = _resolve_url_and_name(analyzer, content, progress)
+    resolved_url = _canonicalize_linkedin_url(resolved_url)
     if not resolved_name:
         resolved_name = resolved_url if "linkedin.com" in resolved_url else (content or "").strip() or "Unknown"
     _emit(progress, "timing.linkedin.resolve", "Resolved LinkedIn identity", {"duration_ms": elapsed_ms(t0)})
@@ -154,7 +214,310 @@ def fetch_linkedin_raw_profile(
 
     _emit(progress, "fetching", "Fetching LinkedIn profile details...", None)
     t1 = now_perf()
-    raw_profile = analyzer.get_linkedin_profile(resolved_url)
+
+    # Multi-actor strategy (recommended):
+    # - Start a full Apify scrape run (required for experiences/educations).
+    # - Start a lite Apify scrape run in parallel and emit an upgraded profile prefill
+    #   (avatar/headline/about/location) as soon as the lite dataset item becomes available.
+
+    full_actor_id = _APIFY_LINKEDIN_FULL_ACTOR_ID
+    lite_actor_id = _APIFY_LINKEDIN_LITE_ACTOR_ID if _APIFY_LINKEDIN_LITE_PREFILL_TIMEOUT_S > 0 else ""
+    if lite_actor_id and lite_actor_id == full_actor_id:
+        lite_actor_id = ""
+
+    lite_timeout_s = float(max(0.0, min(_APIFY_LINKEDIN_LITE_PREFILL_TIMEOUT_S, 30.0)))
+    full_timeout_s = float(max(5.0, min(_APIFY_LINKEDIN_FULL_TIMEOUT_S, 600.0)))
+
+    def _dataset_first_item(dataset_id: str) -> Optional[Dict[str, Any]]:
+        if not dataset_id:
+            return None
+        try:
+            dataset = analyzer.apifyclient.dataset(dataset_id)  # type: ignore[union-attr]
+            try:
+                items = dataset.list_items(limit=1).items
+            except Exception:
+                items = dataset.list_items().items
+            if not items:
+                return None
+            item0 = items[0]
+            return analyzer.convert_datetime_for_json(item0) if hasattr(analyzer, "convert_datetime_for_json") else item0
+        except Exception:
+            return None
+
+    def _extract_prefill_fields(profile: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(profile, dict):
+            return {}
+        name = (
+            profile.get("fullName")
+            or profile.get("name")
+            or profile.get("full_name")
+            or profile.get("personName")
+        )
+        avatar = (
+            profile.get("profilePicHighQuality")
+            or profile.get("profilePic")
+            or profile.get("profile_pic")
+            or profile.get("profilePicture")
+            or profile.get("profilePictureUrl")
+        )
+        headline = profile.get("headline") or profile.get("occupation") or profile.get("jobTitle")
+        about = profile.get("about") or profile.get("summary") or profile.get("bio")
+        location = profile.get("addressWithCountry") or profile.get("location") or profile.get("addressWithoutCountry")
+        out: Dict[str, Any] = {}
+        if isinstance(name, str) and name.strip():
+            out["name"] = name.strip()
+        if isinstance(avatar, str) and avatar.strip():
+            out["avatar"] = avatar.strip()
+        if isinstance(headline, str) and headline.strip():
+            out["headline"] = headline.strip()
+        if isinstance(location, str) and location.strip():
+            out["location"] = location.strip()
+        if isinstance(about, str) and about.strip():
+            out["about"] = about.strip()
+        return out
+
+    def _merge_lite_into_full(full_profile: Dict[str, Any], lite_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(full_profile, dict):
+            full_profile = {}
+        lite = lite_profile if isinstance(lite_profile, dict) else {}
+        if not lite:
+            return full_profile
+
+        merged = dict(full_profile)
+
+        def _is_empty(v: Any) -> bool:
+            if v is None:
+                return True
+            if isinstance(v, str) and not v.strip():
+                return True
+            if isinstance(v, (list, dict)) and not v:
+                return True
+            return False
+
+        # Prefer full for large lists; only fill scalar UI-critical fields from lite when missing.
+        for k in (
+            "fullName",
+            "headline",
+            "occupation",
+            "jobTitle",
+            "location",
+            "addressWithCountry",
+            "addressWithoutCountry",
+            "companyName",
+            "companyIndustry",
+            "connections",
+            "followers",
+            "about",
+        ):
+            if _is_empty(merged.get(k)) and not _is_empty(lite.get(k)):
+                merged[k] = lite.get(k)
+
+        # Avatar: fill profilePic from lite variants if missing.
+        if _is_empty(merged.get("profilePic")):
+            for k in ("profilePicHighQuality", "profilePic", "profilePictureUrl", "profilePicture"):
+                if not _is_empty(lite.get(k)):
+                    merged["profilePic"] = lite.get(k)
+                    break
+
+        # Cross-actor schema drift guard: map common alternates into the canonical keys we use downstream.
+        lite_fields = _extract_prefill_fields(lite)
+        if _is_empty(merged.get("fullName")) and not _is_empty(lite_fields.get("name")):
+            merged["fullName"] = lite_fields.get("name")
+        if _is_empty(merged.get("headline")) and not _is_empty(lite_fields.get("headline")):
+            merged["headline"] = lite_fields.get("headline")
+        if _is_empty(merged.get("about")) and not _is_empty(lite_fields.get("about")):
+            merged["about"] = lite_fields.get("about")
+        if _is_empty(merged.get("addressWithCountry")) and not _is_empty(lite_fields.get("location")):
+            merged["addressWithCountry"] = lite_fields.get("location")
+        if _is_empty(merged.get("profilePic")) and not _is_empty(lite_fields.get("avatar")):
+            merged["profilePic"] = lite_fields.get("avatar")
+
+        return merged
+
+    raw_profile: Optional[Dict[str, Any]] = None
+    lite_profile: Optional[Dict[str, Any]] = None
+
+    # If Apify client isn't available, fall back to the legacy blocking call.
+    apify_client = getattr(analyzer, "apifyclient", None)
+    if apify_client is None:
+        raw_profile = analyzer.get_linkedin_profile(resolved_url)
+    else:
+        def _run_input_full(url: str) -> Dict[str, Any]:
+            # dev_fusion/Linkedin-Profile-Scraper
+            return {"profileUrls": [url]}
+
+        def _run_input_lite(url: str) -> Dict[str, Any]:
+            # apimaestro/linkedin-profile-detail
+            return {"username": url, "includeEmail": False}
+
+        def _normalize_lite_item(item: Dict[str, Any]) -> Dict[str, Any]:
+            # apimaestro returns {"basic_info": {...}, "experience": [...], "education": [...]}
+            if lite_actor_id != _APIFY_LINKEDIN_LITE_ACTOR_ID:
+                return item
+            basic = item.get("basic_info")
+            if not isinstance(basic, dict):
+                return item
+
+            out: Dict[str, Any] = {}
+
+            full_name = basic.get("fullname") or basic.get("full_name") or basic.get("fullName")
+            if isinstance(full_name, str) and full_name.strip():
+                out["fullName"] = full_name.strip()
+
+            avatar = basic.get("profile_picture_url") or basic.get("profilePic") or basic.get("profilePicHighQuality")
+            if isinstance(avatar, str) and avatar.strip():
+                out["profilePic"] = avatar.strip()
+
+            headline = basic.get("headline")
+            if isinstance(headline, str) and headline.strip():
+                out["headline"] = headline.strip()
+
+            about = basic.get("about")
+            if isinstance(about, str) and about.strip():
+                out["about"] = about.strip()
+
+            loc = basic.get("location")
+            loc_full = ""
+            if isinstance(loc, dict):
+                loc_full = str(loc.get("full") or loc.get("city") or loc.get("country") or "").strip()
+            elif isinstance(loc, str):
+                loc_full = loc.strip()
+            if loc_full:
+                out["addressWithCountry"] = loc_full
+
+            if basic.get("connection_count") is not None:
+                out["connections"] = basic.get("connection_count")
+            if basic.get("follower_count") is not None:
+                out["followers"] = basic.get("follower_count")
+            if basic.get("current_company") is not None:
+                out["companyName"] = basic.get("current_company")
+
+            return out or item
+
+        run_input_full = _run_input_full(resolved_url)
+        run_input_lite = _run_input_lite(resolved_url)
+        full_run = None
+        lite_run = None
+        try:
+            full_run = apify_client.actor(full_actor_id).start(run_input=run_input_full, wait_for_finish=0)
+        except Exception:
+            full_run = None
+        if lite_actor_id:
+            try:
+                lite_run = apify_client.actor(lite_actor_id).start(run_input=run_input_lite, wait_for_finish=0)
+            except Exception:
+                lite_run = None
+
+        if not isinstance(full_run, dict) or not full_run.get("id") or not full_run.get("defaultDatasetId"):
+            # Fallback: old path (single full call).
+            raw_profile = analyzer.get_linkedin_profile(resolved_url)
+        else:
+            full_run_id = str(full_run.get("id") or "").strip()
+            full_dataset_id = str(full_run.get("defaultDatasetId") or "").strip()
+
+            lite_run_id = str((lite_run or {}).get("id") or "").strip() if isinstance(lite_run, dict) else ""
+            lite_dataset_id = str((lite_run or {}).get("defaultDatasetId") or "").strip() if isinstance(lite_run, dict) else ""
+
+            lite_emitted = False
+            start_poll = now_perf()
+
+            # Poll loop: opportunistically emit lite prefill while waiting for the full run to finish.
+            while True:
+                elapsed_s = (now_perf() - start_poll)
+
+                if (not lite_emitted) and lite_dataset_id and (elapsed_s <= lite_timeout_s):
+                    lite_item_raw = _dataset_first_item(lite_dataset_id)
+                    lite_item = _normalize_lite_item(lite_item_raw) if lite_item_raw else None
+                    if lite_item:
+                        lite_profile = lite_item
+                        fields = _extract_prefill_fields(lite_item)
+                        if fields:
+                            try:
+                                data = {
+                                    "name": fields.get("name") or resolved_name,
+                                    "avatar": fields.get("avatar") or "",
+                                    "headline": fields.get("headline") or "",
+                                    "location": fields.get("location") or "",
+                                    "about": fields.get("about") or "",
+                                    "work_experience": [],
+                                    "education": [],
+                                }
+                                _emit(
+                                    progress,
+                                    "preview.linkedin.profile",
+                                    "LinkedIn profile lite preview ready (fetching full profile in background)",
+                                    {
+                                        "prefill_cards": [
+                                            {
+                                                "card": "profile",
+                                                "data": data,
+                                                "meta": {
+                                                    "partial": True,
+                                                    "degraded": False,
+                                                    "reason": "apify_lite_prefill",
+                                                    "candidate_url": resolved_url,
+                                                    "provider": "apify",
+                                                    "actor_id": lite_actor_id,
+                                                    "run_id": lite_run_id,
+                                                },
+                                            }
+                                        ]
+                                    },
+                                )
+                            except Exception:
+                                pass
+                        lite_emitted = True
+                        if lite_run_id:
+                            try:
+                                apify_client.run(lite_run_id).abort(gracefully=True)
+                            except Exception:
+                                pass
+
+                # If lite times out without yielding anything, abort it best-effort to avoid extra cost.
+                if (not lite_emitted) and lite_run_id and (lite_timeout_s > 0) and (elapsed_s > lite_timeout_s):
+                    try:
+                        apify_client.run(lite_run_id).abort(gracefully=True)
+                    except Exception:
+                        pass
+                    lite_emitted = True  # stop checking
+
+                # Wait for the full run to finish (1s wait to allow frequent lite polling).
+                try:
+                    run_state = apify_client.run(full_run_id).wait_for_finish(wait_secs=1)
+                except Exception:
+                    run_state = None
+
+                status = (run_state or {}).get("status") if isinstance(run_state, dict) else None
+                if status in ("SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"):
+                    if status != "SUCCEEDED":
+                        raise ValueError(f"Apify run failed with status: {status}")
+                    break
+
+                # Global timeout guard for the full scrape.
+                if elapsed_s >= full_timeout_s:
+                    try:
+                        apify_client.run(full_run_id).abort(gracefully=True)
+                    except Exception:
+                        pass
+                    raise ValueError("Timed out fetching LinkedIn profile from Apify")
+
+                # Small pacing to avoid tight loops if wait_for_finish returned immediately.
+                time.sleep(0.05)
+
+            # Pull the final profile from the full dataset.
+            full_item = _dataset_first_item(full_dataset_id)
+            if not full_item:
+                raise ValueError("No items found in Apify dataset")
+
+            raw_profile = _merge_lite_into_full(full_item, lite_profile)
+
+            # Best-effort: stop lite run if still running.
+            if lite_run_id:
+                try:
+                    apify_client.run(lite_run_id).abort(gracefully=True)
+                except Exception:
+                    pass
+
     _emit(progress, "timing.linkedin.raw_profile", "Fetched LinkedIn raw profile", {"duration_ms": elapsed_ms(t1)})
     if not raw_profile:
         raise ValueError("Failed to fetch LinkedIn profile; please verify the URL or try again")
@@ -176,11 +539,13 @@ def fetch_linkedin_raw_profile(
             "fullName",
             "name",
             "profilePic",
+            "profilePicHighQuality",
             "headline",
             "occupation",
             "jobTitle",
             "location",
             "addressWithCountry",
+            "addressWithoutCountry",
             "companyName",
             "companyIndustry",
             "connections",
@@ -201,12 +566,17 @@ def fetch_linkedin_raw_profile(
 
     raw_profile_store = _prune_for_storage(raw_profile)
 
+    headline = str(raw_profile.get("headline") or raw_profile.get("occupation") or raw_profile.get("jobTitle") or "").strip()
+    location = str(raw_profile.get("addressWithCountry") or raw_profile.get("location") or raw_profile.get("addressWithoutCountry") or "").strip()
+
     report = {
         "_linkedin_url": resolved_url,
         "_linkedin_id": linkedin_id,
         "profile_data": {
-            "avatar": raw_profile.get("profilePic"),
+            "avatar": raw_profile.get("profilePic") or raw_profile.get("profilePicHighQuality"),
             "name": resolved_name,
+            "headline": headline,
+            "location": location,
             "about": raw_profile.get("about") or "",
             "work_experience": work_experience,
             "education": education,
