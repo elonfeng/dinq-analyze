@@ -438,6 +438,19 @@ def transform_data(source_data):
 
     # --- Populate Closest Collaborator Block (Added avatar field) ---
     collaborator_src = _as_dict(source_data.get('most_frequent_collaborator'))
+    if not collaborator_src or not collaborator_src.get("full_name"):
+        # Back-compat: older reports only have coauthor_stats.most_frequent_collaborator (name/count/best_paper).
+        mf = _as_dict(coauthor_stats_src.get("most_frequent_collaborator"))
+        mf_name = str(mf.get("name") or "").strip()
+        if mf_name and mf_name.lower() not in ("no suitable collaborator found", "no frequent collaborator found"):
+            collaborator_src = {
+                "full_name": mf_name,
+                "affiliation": None,
+                "research_interests": [],
+                "scholar_id": None,
+                "coauthored_papers": mf.get("coauthored_papers"),
+                "best_paper": mf.get("best_paper") if isinstance(mf.get("best_paper"), dict) else {},
+            }
     collaborator_target = target_data['researcherProfile']['dataBlocks']['closestCollaborator']
 
     # Check if there is a valid collaborator
