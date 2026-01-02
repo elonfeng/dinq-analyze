@@ -523,7 +523,57 @@ def _github_repos(data: Any, ctx: GateContext) -> GateDecision:
 
 
 def _github_role_model(data: Any, ctx: GateContext) -> GateDecision:
-    return _retry_empty_dict(data, code="empty_role_model", message="Missing role model analysis")
+    payload = _as_dict(data)
+    if not payload:
+        return GateDecision(action="retry", normalized=payload, issue=GateIssue(code="empty_role_model", message="Missing role model analysis", retryable=True))
+
+    name = str(payload.get("name") or "").strip()
+    github = str(payload.get("github") or "").strip()
+    if not name or not github:
+        return GateDecision(
+            action="retry",
+            normalized=payload,
+            issue=GateIssue(code="missing_role_model_fields", message="Missing role model name/github", retryable=True),
+        )
+
+    def _extract_login(value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        lowered = raw.lower()
+        if lowered.startswith("http://") or lowered.startswith("https://"):
+            parts = lowered.split("github.com/", 1)
+            if len(parts) == 2:
+                tail = parts[1].split("?", 1)[0].split("#", 1)[0].strip("/")
+                if tail:
+                    return tail.split("/", 1)[0].strip()
+        return raw.strip().lstrip("@").split("/", 1)[0].strip()
+
+    # Never allow "self as role model" (some users exist in the pioneers dataset).
+    user_login = ""
+    user_url = ""
+    art = ctx.artifacts.get("resource.github.data")
+    if isinstance(art, dict):
+        u = art.get("user") if isinstance(art.get("user"), dict) else {}
+        user_login = str(u.get("login") or "").strip().lower()
+        user_url = str(u.get("url") or "").strip().lower().rstrip("/")
+
+    rm_login = _extract_login(github).lower()
+    rm_url = str(github).strip().lower().rstrip("/")
+    if user_login and rm_login and rm_login == user_login:
+        return GateDecision(
+            action="retry",
+            normalized=payload,
+            issue=GateIssue(code="self_role_model", message="Role model must not be the analyzed user", retryable=True),
+        )
+    if user_url and rm_url and rm_url == user_url:
+        return GateDecision(
+            action="retry",
+            normalized=payload,
+            issue=GateIssue(code="self_role_model", message="Role model must not be the analyzed user", retryable=True),
+        )
+
+    return GateDecision(action="accept", normalized=payload)
 
 
 def _github_roast(data: Any, ctx: GateContext) -> GateDecision:

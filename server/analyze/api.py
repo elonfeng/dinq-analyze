@@ -414,6 +414,7 @@ def _has_any_nonempty(data: Dict[str, Any], keys: tuple[str, ...]) -> bool:
 def _is_usable_final_cache_hit(
     *,
     source: str,
+    subject_key: Optional[str] = None,
     final_payload: Dict[str, Any],
     requested_cards: Optional[list[str]] = None,
 ) -> bool:
@@ -432,6 +433,19 @@ def _is_usable_final_cache_hit(
     if not isinstance(cards, dict) or not cards:
         return False
 
+    def _extract_login_from_github(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        lowered = raw.lower()
+        if lowered.startswith("http://") or lowered.startswith("https://"):
+            parts = lowered.split("github.com/", 1)
+            if len(parts) == 2:
+                tail = parts[1].split("?", 1)[0].split("#", 1)[0].strip("/")
+                if tail:
+                    return tail.split("/", 1)[0].strip()
+        return raw.strip().lstrip("@").split("/", 1)[0].strip()
+
     card_types = rules.normalize_cards(src, requested_cards)
     for ct in card_types:
         ct_str = str(ct)
@@ -447,6 +461,14 @@ def _is_usable_final_cache_hit(
         )
         if decision.action != "accept":
             return False
+
+        # Extra safety: GitHub role_model must not be the analyzed user.
+        if src == "github" and ct_str == "role_model" and isinstance(subject_key, str) and subject_key.startswith("login:"):
+            login = subject_key[len("login:") :].strip().lower()
+            rm = decision.normalized if isinstance(decision.normalized, dict) else {}
+            rm_login = _extract_login_from_github(rm.get("github")).lower()
+            if login and rm_login and rm_login == login:
+                return False
     return True
 
 
@@ -1079,7 +1101,7 @@ def analyze():
             )
             if l1_final and isinstance(l1_final.get("payload"), dict) and l1_final.get("payload"):
                 payload = l1_final["payload"]
-                if _is_usable_final_cache_hit(source=source, final_payload=payload, requested_cards=requested_cards):
+                if _is_usable_final_cache_hit(source=source, subject_key=subject_key, final_payload=payload, requested_cards=requested_cards):
                     cache_hit_payload = payload
                     cache_hit_source = "l1"
                     cache_hit_stale = bool(l1_final.get("stale"))
@@ -1097,7 +1119,7 @@ def analyze():
                 )
                 if cached and isinstance(cached.get("payload"), dict) and cached.get("payload"):
                     payload = cached.get("payload") or {}
-                    if _is_usable_final_cache_hit(source=source, final_payload=payload, requested_cards=requested_cards):
+                    if _is_usable_final_cache_hit(source=source, subject_key=subject_key, final_payload=payload, requested_cards=requested_cards):
                         created_at = cached.get("created_at") if isinstance(cached.get("created_at"), datetime) else None
                         cache_hit_payload = payload
                         cache_hit_source = "db"

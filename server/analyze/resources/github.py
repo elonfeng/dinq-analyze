@@ -996,6 +996,21 @@ def run_github_enrich_bundle(
             "impact": f"{impact} lines changed",
         }
 
+    def _extract_login_from_github(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        lowered = raw.lower()
+        if lowered.startswith("http://") or lowered.startswith("https://"):
+            # https://github.com/<login>[/...]
+            parts = lowered.split("github.com/", 1)
+            if len(parts) == 2:
+                tail = parts[1].split("?", 1)[0].split("#", 1)[0].strip("/")
+                if tail:
+                    return tail.split("/", 1)[0].strip()
+        # Sometimes we store raw login in `github`.
+        return raw.strip().lstrip("@").split("/", 1)[0].strip()
+
     user = base.get("user") if isinstance(base.get("user"), dict) else {}
     overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
     feature_project = base.get("feature_project") if isinstance(base.get("feature_project"), dict) else {}
@@ -1128,6 +1143,10 @@ def run_github_enrich_bundle(
                 repo_tags.append(t.strip()[:60])
     repo_tags = repo_tags[:8]
 
+    user_login = str(user.get("login") or login).strip()
+    user_login_l = user_login.lower()
+    user_url_l = str(user.get("url") or f"https://github.com/{user_login_l}").strip().lower().rstrip("/")
+
     # Valuation (upstream schema): level + numeric salary_range + industry_ranking + growth_potential + reasoning.
     valuation = results.get("valuation") if isinstance(results.get("valuation"), dict) else {}
     level = _coerce_level(valuation.get("level"))
@@ -1170,24 +1189,58 @@ def run_github_enrich_bundle(
     role_model = results.get("role_model") if isinstance(results.get("role_model"), dict) else {}
     name = str(role_model.get("name") or "").strip()
     gh = str(role_model.get("github") or "").strip()
+    is_self = False
+    if gh:
+        rm_login_l = _extract_login_from_github(gh).lower()
+        if rm_login_l and rm_login_l == user_login_l:
+            is_self = True
+        if str(gh).strip().lower().rstrip("/") == user_url_l:
+            is_self = True
+        if str(gh).strip().lower() == user_login_l:
+            is_self = True
+    if is_self:
+        # Some users are included in the pioneers dataset (e.g., asim-shrestha). Never recommend self.
+        role_model = {}
+        name = ""
+        gh = ""
+
     if not name or not gh:
         pioneers = getattr(analyzer, "dev_pioneers_data", None)
         if isinstance(pioneers, list) and pioneers:
-            wanted = " ".join(tags).lower()
+            langs = []
+            raw_langs = code.get("languages") if isinstance(code.get("languages"), dict) else {}
+            if isinstance(raw_langs, dict):
+                for k in raw_langs.keys():
+                    if isinstance(k, str) and k.strip():
+                        langs.append(k.strip())
+            wanted = " ".join(tags + repo_tags + langs).lower()
+
+            def _tokenize(text: str) -> set[str]:
+                return {w for w in re.split(r"[^a-z0-9]+", str(text or "").lower()) if w}
 
             def _score(p: Any) -> float:
                 if not isinstance(p, dict):
                     return 0.0
-                area = str(p.get("area") or "").lower()
-                if not area or not wanted:
+                gh_login = _extract_login_from_github(p.get("github")).lower()
+                if gh_login and gh_login == user_login_l:
+                    return -1.0
+
+                area = str(p.get("area") or "")
+                famous_work = str(p.get("famous_work") or "")
+                company = str(p.get("Company") or "")
+                job = str(p.get("Job") or "")
+                hay = " ".join([area, famous_work, company, job]).lower()
+                if not hay or not wanted:
                     return 0.0
-                wt = {w for w in re.split(r"[^a-z0-9]+", wanted) if w}
-                at = {w for w in re.split(r"[^a-z0-9]+", area) if w}
+                wt = _tokenize(wanted)
+                at = _tokenize(hay)
                 if not wt or not at:
                     return 0.0
                 return float(len(wt & at)) / float(len(wt | at))
 
-            best = max(pioneers, key=_score)
+            scored = [(p, _score(p)) for p in pioneers]
+            scored = [(p, s) for p, s in scored if s >= 0.0]
+            best = max(scored, key=lambda x: x[1])[0] if scored else max(pioneers, key=_score)
             best_score = _score(best)
             role_model = {
                 "name": best.get("name") or "Role model",
