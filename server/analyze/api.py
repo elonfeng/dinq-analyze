@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, request, jsonify, Response, g
-from sqlalchemy import func
+from sqlalchemy import func, text
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from server.utils.auth import require_verified_user
@@ -293,6 +293,57 @@ def _get_async_create_executor() -> ThreadPoolExecutor:
             thread_name_prefix="dinq-analyze-async-create",
         )
         return _async_create_executor
+
+
+_async_create_warmup_started = False
+_async_create_warmup_lock = threading.Lock()
+
+
+def _start_async_create_warmup() -> None:
+    """
+    Best-effort warmup for async-create mode.
+
+    Goal: keep `POST /api/analyze` low-latency while reducing /stream's `wait_job` time by
+    pre-initializing:
+      - the async-create ThreadPool worker threads
+      - the jobs DB connection pool
+    """
+
+    if not _async_create_job_enabled():
+        return
+
+    global _async_create_warmup_started
+    with _async_create_warmup_lock:
+        if _async_create_warmup_started:
+            return
+        _async_create_warmup_started = True
+
+    def _task() -> None:
+        # Pre-start ThreadPoolExecutor threads (they spawn lazily on first submit()).
+        try:
+            ex = _get_async_create_executor()
+            try:
+                fut = ex.submit(lambda: None)
+                fut.add_done_callback(lambda _f: None)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Warm the jobs DB pool (first connect can be 1-2s on cross-region Postgres).
+        try:
+            with get_db_session() as session:
+                session.execute(text("SELECT 1"))
+        except Exception:
+            return
+
+    threading.Thread(target=_task, daemon=True, name="dinq-analyze-warmup").start()
+
+
+try:
+    _start_async_create_warmup()
+except Exception:
+    pass
 
 
 def _log_future_exception(task_name: str, fut: Future) -> None:
