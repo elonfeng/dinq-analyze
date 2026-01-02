@@ -13,6 +13,7 @@ import json
 import os
 import time
 import logging
+from typing import Any
 from server.llm.gateway import openrouter_chat
 from server.config.llm_models import get_model
 import pandas as pd
@@ -165,10 +166,94 @@ def get_template_figure(author_info, max_retries=3):
         for item in academic_data:
             celeb_dict[item["name"]] = item
 
-        # 检查研究者是否已经是名人
-        if author_info['researcher']['name'] in celeb_dict.keys() or author_info['researcher']['total_citations'] > 10000:
-            logger.info(f"Researcher {author_info['researcher']['name']} is already a celebrity or has over 10,000 citations, no role model needed")
-            return None
+        # --- Celebrity / high-impact researchers ---------------------------------
+        # 旧逻辑：名人或引用过高时返回 None，导致上层用 self-role-model 占位。
+        # 新逻辑：仍然给一个“更强的对标角色”，并且保证不是自己。
+        researcher = author_info.get("researcher", {}) if isinstance(author_info, dict) else {}
+        if not isinstance(researcher, dict):
+            researcher = {}
+
+        researcher_name = str(researcher.get("name") or "").strip()
+        researcher_sid = str(researcher.get("scholar_id") or "").strip()
+
+        def _parse_int(v: Any) -> int:
+            try:
+                if v is None:
+                    return 0
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    return int(v)
+                s = str(v).strip().replace(",", "")
+                return int(float(s)) if s else 0
+            except Exception:  # noqa: BLE001
+                return 0
+
+        researcher_citations = _parse_int(researcher.get("total_citations"))
+        is_high_tier = bool(researcher_name) and (researcher_name in celeb_dict.keys() or researcher_citations > 10000)
+        if is_high_tier:
+            logger.info(
+                f"Researcher {researcher_name} is high-tier (citations={researcher_citations}), selecting a stronger external role model"
+            )
+
+            # Pick the highest-citation talent from the table (excluding self).
+            best = None
+            best_cit = -1
+            for item in academic_data:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name or (researcher_name and name == researcher_name):
+                    continue
+                sid = str(item.get("google_scholar") or "").strip()
+                if researcher_sid and sid and sid == researcher_sid:
+                    continue
+                cit = _parse_int(item.get("citation"))
+                if cit > best_cit:
+                    best_cit = cit
+                    best = item
+
+            if not best:
+                return get_default_role_model(author_info)
+
+            original_data = best
+            institution = original_data.get("institution", original_data.get("affiliation", ""))
+            institution_parts = institution.split(";", 1) if institution else [""]
+            clean_institution = institution_parts[0].strip()
+
+            photo_url = original_data.get("photo_url", "")
+            if not photo_url and len(institution_parts) > 1:
+                institution_image = institution_parts[1].strip()
+                if institution_image.startswith(" http"):
+                    photo_url = institution_image
+            if not photo_url:
+                photo_url = original_data.get("image", "")
+
+            achievement = original_data.get("achievement", "")
+            if not achievement:
+                achievement = original_data.get("famous_work", original_data.get("honor", ""))
+
+            # Best-effort similarity reason (no extra LLM call for high-tier users).
+            fields = researcher.get("research_fields")
+            if isinstance(fields, list) and fields:
+                fields_text = ", ".join([str(f).strip() for f in fields if str(f).strip()][:5])
+                similarity_reason = (
+                    f"You already have strong impact in {fields_text}. "
+                    f"Benchmark against {original_data.get('name')}—known for {achievement}—to stay ambitious."
+                )
+            else:
+                similarity_reason = (
+                    f"Benchmark against {original_data.get('name')}—known for {achievement}—to stay ambitious."
+                )
+
+            role_model = {
+                "name": original_data.get("name", ""),
+                "institution": clean_institution,
+                "position": original_data.get("position", ""),
+                "photo_url": photo_url,
+                "achievement": achievement,
+                "similarity_reason": similarity_reason,
+            }
+            logger.info(f"Returning role model for high-tier researcher: {role_model.get('name')}")
+            return role_model
 
         # 格式化作者信息
         author_info_str = format_report_for_llm(author_info)

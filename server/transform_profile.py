@@ -411,59 +411,29 @@ def transform_data(source_data):
     # **********************************
 
 
-    # --- Populate Role Model Block (Modified to handle self as role model and fallback) ---
-    role_model_src = source_data.get('role_model')
+    # --- Populate Role Model Block ---
+    role_model_src = _as_dict(source_data.get('role_model'))
     role_model_target = target_data['researcherProfile']['dataBlocks']['roleModel']
 
-    # 检查是否有有效的角色模型
-    has_valid_role_model = isinstance(role_model_src, dict) and role_model_src.get('name')
+    has_valid_role_model = bool(role_model_src.get('name'))
+    role_model_target['found'] = bool(has_valid_role_model)
 
-    # 如果没有有效的角色模型，创建以自己为角色模型
     if not has_valid_role_model:
-        logger.info(f"No valid role model found for {researcher_name}, using self as role model")
-
-        # 获取研究者的代表作
-        representative_work = ""
-        if 'most_cited_paper' in source_data and source_data['most_cited_paper']:
-            paper = source_data['most_cited_paper']
-            representative_work = f"{paper.get('title', 'Unknown paper')} ({paper.get('year', '')})"
-
-        # 创建以自己为角色模型的字典
-        role_model_src = {
-            "name": researcher_name,
-            "institution": researcher_src.get('affiliation', ''),
-            "position": "Established Researcher",
-            "photo_url": avatar_url,
-            "achievement": representative_work,
-            "similarity_reason": "Congrats! You are already your own hero! Your unique research path and contributions have established you as a notable figure in your field."
-        }
-
-        # 记录创建的角色模型
-        logger.info(f"Created self role model for {researcher_name} with achievement: {representative_work}")
-
-    # 现在我们有了有效的角色模型（要么是原始的，要么是创建的自己模型）
-    role_model_target['found'] = True
-    role_model_target['name'] = role_model_src.get('name')
-    role_model_target['institution'] = role_model_src.get('institution')
-    role_model_target['position'] = role_model_src.get('position')
-
-    # 处理photo_url字段
-    photo_url = role_model_src.get('photo_url')
-    if not photo_url and researcher_name == role_model_src.get('name'):
-        # 如果角色模型是研究者自己且没有照片，使用研究者的头像
-        photo_url = avatar_url
-    role_model_target['photoUrl'] = photo_url
-
-    role_model_target['achievement'] = role_model_src.get('achievement')
-    role_model_target['similarityReason'] = role_model_src.get('similarity_reason')
-
-    # 检查是否是自己作为角色模型
-    is_self_role_model = researcher_name == role_model_src.get('name')
-    role_model_target['isSelf'] = is_self_role_model
-
-    # 如果是自己作为角色模型，确保有特殊的标记
-    if is_self_role_model and "Congrats! You are already your own hero" not in role_model_target.get('similarityReason', ''):
-        role_model_target['similarityReason'] = "Congrats! You are already your own hero! Your unique research path and contributions have established you as a notable figure in your field."
+        role_model_target['name'] = None
+        role_model_target['institution'] = None
+        role_model_target['position'] = None
+        role_model_target['photoUrl'] = None
+        role_model_target['achievement'] = None
+        role_model_target['similarityReason'] = None
+        role_model_target['isSelf'] = False
+    else:
+        role_model_target['name'] = role_model_src.get('name')
+        role_model_target['institution'] = role_model_src.get('institution')
+        role_model_target['position'] = role_model_src.get('position')
+        role_model_target['photoUrl'] = role_model_src.get('photo_url') or None
+        role_model_target['achievement'] = role_model_src.get('achievement')
+        role_model_target['similarityReason'] = role_model_src.get('similarity_reason')
+        role_model_target['isSelf'] = bool(researcher_name and researcher_name == role_model_src.get('name'))
 
 
     # --- Populate Closest Collaborator Block (Added avatar field) ---

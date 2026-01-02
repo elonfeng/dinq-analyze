@@ -107,15 +107,21 @@ def resolve_scholar_identity(input_payload: Dict[str, Any]) -> Tuple[Optional[st
     if not content:
         return None, None
 
-    if "scholar.google" in content and "citations" in content:
-        try:
-            parsed = _parse_url_loose(content)
-            qs = parse_qs(parsed.query or "")
-            user = (qs.get("user") or [None])[0]
-            if user:
-                return str(user).strip(), None
-        except Exception:  # noqa: BLE001
-            pass
+    # Support Scholar profile URLs and shorthand forms like:
+    # - https://scholar.google.com/citations?user=...&hl=en
+    # - scholar?user=...
+    # - citations?user=...
+    # We only accept IDs matching the Scholar token regex to avoid misclassifying random URLs.
+    try:
+        parsed = _parse_url_loose(content)
+        qs = parse_qs(parsed.query or "")
+        user = (qs.get("user") or [None])[0]
+        if user:
+            user = str(user).strip()
+            if _SCHOLAR_ID_RE.match(user):
+                return user, None
+    except Exception:  # noqa: BLE001
+        pass
 
     # Heuristic: treat compact token-like content as scholar_id.
     if " " not in content and _SCHOLAR_ID_RE.match(content):

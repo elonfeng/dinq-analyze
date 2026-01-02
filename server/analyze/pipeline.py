@@ -1622,6 +1622,20 @@ class PipelineExecutor:
                         text = generate_critical_evaluation(report) or ""
                         return {"blockTitle": "Roast", "evaluation": str(text).strip() or None}
 
+                    # Scholar role model is derived from an external reference set (top_ai_talents.csv).
+                    # Compute it on-demand for the `roleModel` card to avoid slowing down other cards.
+                    if ct == "roleModel":
+                        try:
+                            existing = report.get("role_model")
+                            if not (isinstance(existing, dict) and existing.get("name")):
+                                from server.services.scholar.role_model_service import get_role_model as _get_role_model
+
+                                role_model = _get_role_model(report, callback=None)
+                                if isinstance(role_model, dict) and role_model.get("name"):
+                                    report["role_model"] = role_model
+                        except Exception:
+                            pass
+
                     from server.transform_profile import transform_data
 
                     transformed = transform_data(report) if isinstance(report, dict) else {}
