@@ -314,6 +314,26 @@ def _build_base_report(deps: ScholarPipelineDeps, state: ScholarPipelineState) -
                     item["author_position"] = paper.get("author_position")
                 papers_preview.append(item)
 
+    # Best-effort: map deterministic coauthor stats into the "closest collaborator" schema
+    # used by the frontend contract. This avoids the heavy/LLM enrich path while still
+    # providing a meaningful collaborator card (name + best paper + count).
+    most_frequent_collaborator: Optional[Dict[str, Any]] = None
+    try:
+        mf = state.coauthor_stats.get("most_frequent_collaborator") if isinstance(state.coauthor_stats, dict) else None
+        if isinstance(mf, dict):
+            mf_name = str(mf.get("name") or "").strip()
+            if mf_name and mf_name.lower() not in ("no suitable collaborator found", "no frequent collaborator found"):
+                most_frequent_collaborator = {
+                    "full_name": mf_name,
+                    "affiliation": None,
+                    "research_interests": [],
+                    "scholar_id": None,
+                    "coauthored_papers": mf.get("coauthored_papers"),
+                    "best_paper": mf.get("best_paper") if isinstance(mf.get("best_paper"), dict) else {},
+                }
+    except Exception:  # noqa: BLE001
+        most_frequent_collaborator = None
+
     report: Dict[str, Any] = {
         "researcher": {
             "name": name,
@@ -334,7 +354,7 @@ def _build_base_report(deps: ScholarPipelineDeps, state: ScholarPipelineState) -
         "papers_preview": papers_preview,
         "coauthor_stats": state.coauthor_stats,
         "rating": state.rating,
-        "most_frequent_collaborator": None,
+        "most_frequent_collaborator": most_frequent_collaborator,
         "paper_news": state.pub_stats.get("paper_news", {}),
     }
     return report
