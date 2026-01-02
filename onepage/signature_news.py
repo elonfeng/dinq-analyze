@@ -80,7 +80,10 @@ def get_latest_news(paper_info):
             messages=[paper_content],
             temperature=0.2,
             max_tokens=800,
-            timeout_seconds=float(os.getenv("DINQ_SIGNATURE_NEWS_TIMEOUT_SECONDS", "12") or "12"),
+            # Perplexity online search is often >10s; keep a sane default and disable cache so
+            # we don't "stick" on a transient no-news/timeout answer.
+            timeout_seconds=float(os.getenv("DINQ_SIGNATURE_NEWS_TIMEOUT_SECONDS", "30") or "30"),
+            cache=False,
         )
         summary = str(summary).strip() if summary else ""
         logger.debug(f"Received response: {summary[:100]}...")

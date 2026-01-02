@@ -34,6 +34,7 @@ from server.tasks.scheduler import CardScheduler
 from server.analyze.pipeline import create_job_cards, PipelineExecutor
 from server.analyze.card_specs import get_stream_spec
 from server.analyze.quality_gate import GateContext, validate_card_output
+from server.services.scholar.text_normalize import normalize_scholar_paper_title
 from server.analyze import rules
 from server.utils.json_clean import prune_empty
 from server.utils.sqlite_cache import get_sqlite_cache
@@ -308,6 +309,10 @@ def _build_cards_from_final_cache_payload(
         if ct_str == "full_report" or ct_str.startswith("resource."):
             continue
         raw = cards_payload.get(ct_str)
+        if src == "scholar" and isinstance(raw, dict) and ct_str in ("paperOfYear", "representativePaper"):
+            patched = dict(raw)
+            patched["title"] = normalize_scholar_paper_title(patched.get("title"))
+            raw = patched
         decision = validate_card_output(
             source=src,
             card_type=ct_str,

@@ -77,6 +77,7 @@ except Exception:  # noqa: BLE001
 from server.utils.utils import has_chinese, fuzzy_match_name, fuzzy_match_name_improved
 from onepage.author_paper import find_authors_from_title
 from server.services.scholar.cancel import raise_if_cancelled
+from server.services.scholar.text_normalize import normalize_scholar_paper_title
 from server.services.scholar.http_fetcher import (
     CrawlbaseHTMLFetcher,
     FetcherPolicy,
@@ -782,7 +783,7 @@ class ScholarDataFetcher:
                         if not title_element:
                             continue
 
-                        title = title_element.text.strip()
+                        title = normalize_scholar_paper_title(title_element.text.strip())
                         citation_element = pub.find('a', class_='gsc_a_ac')
                         citation_count = citation_element.text.strip() if citation_element and citation_element.text.strip() else "0"
                         year_element = pub.find('span', class_='gsc_a_h')
