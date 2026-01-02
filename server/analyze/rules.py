@@ -48,8 +48,8 @@ CARD_MATRIX: Dict[str, List[Dict[str, object]]] = {
         {"card_type": "resource.linkedin.raw_profile", "depends_on": ["resource.linkedin.preview"], "priority": 0},
         # Fused enrich bundle (single LLM call) for all non-roast cards.
         {"card_type": "resource.linkedin.enrich", "depends_on": ["resource.linkedin.raw_profile"], "priority": 5, "concurrency_group": "llm"},
-        # Phase 1 (fast-first): show raw profile immediately after scraping.
-        {"card_type": "profile", "depends_on": ["resource.linkedin.raw_profile"], "priority": 10},
+        # Phase 1: complete profile after enrich so UI-only sections (e.g. colleagues_view/life_well_being) are present.
+        {"card_type": "profile", "depends_on": ["resource.linkedin.enrich"], "priority": 10},
         # Phase 2: UI cards derived from the fused enrich artifact (no per-card LLM calls).
         {"card_type": "skills", "depends_on": ["resource.linkedin.enrich"], "priority": 20, "concurrency_group": "default"},
         {"card_type": "career", "depends_on": ["resource.linkedin.enrich"], "priority": 30, "concurrency_group": "default"},

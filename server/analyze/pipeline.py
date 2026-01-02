@@ -1875,15 +1875,52 @@ class PipelineExecutor:
                         raise ValueError("missing resource.linkedin.raw_profile")
                     raw_report = dict(raw_art.payload or {})
 
+                    enrich_art = self._artifact_store.get_artifact(job.id, "resource.linkedin.enrich")
+                    enrich = enrich_art.payload if (enrich_art is not None and isinstance(enrich_art.payload, dict)) else {}
+
                     if ct == "profile":
+                        profile_data = raw_report.get("profile_data") if isinstance(raw_report.get("profile_data"), dict) else {}
+                        merged_profile: Dict[str, Any] = dict(profile_data)
+
+                        if isinstance(enrich.get("skills"), dict):
+                            merged_profile["skills"] = enrich.get("skills")
+                        if isinstance(enrich.get("career"), dict):
+                            merged_profile["career"] = enrich.get("career")
+                        if isinstance(enrich.get("role_model"), dict):
+                            merged_profile["role_model"] = enrich.get("role_model")
+
+                        money_payload = enrich.get("money") if isinstance(enrich.get("money"), dict) else None
+                        if money_payload is None and isinstance(enrich.get("money_analysis"), dict):
+                            money_payload = enrich.get("money_analysis")
+                        if isinstance(money_payload, dict):
+                            merged_profile["money_analysis"] = money_payload
+
+                        if isinstance(enrich.get("colleagues_view"), dict):
+                            merged_profile["colleagues_view"] = enrich.get("colleagues_view")
+                        if isinstance(enrich.get("life_well_being"), dict):
+                            merged_profile["life_well_being"] = enrich.get("life_well_being")
+
+                        work_summary = enrich.get("work_experience_summary")
+                        if isinstance(work_summary, str) and work_summary.strip():
+                            merged_profile["work_experience_summary"] = work_summary.strip()
+                        edu_summary = enrich.get("education_summary")
+                        if isinstance(edu_summary, str) and edu_summary.strip():
+                            merged_profile["education_summary"] = edu_summary.strip()
+
+                        summary_payload = enrich.get("summary") if isinstance(enrich.get("summary"), dict) else {}
+                        about = summary_payload.get("about")
+                        if about is not None:
+                            merged_profile["about"] = about
+                        tags = summary_payload.get("personal_tags")
+                        if tags is not None:
+                            merged_profile["personal_tags"] = tags
+
+                        raw_report["profile_data"] = merged_profile
                         return extract_card_payload(source, raw_report, ct)
 
                     profile_data = raw_report.get("profile_data") if isinstance(raw_report.get("profile_data"), dict) else {}
                     raw_profile = profile_data.get("raw_profile") if isinstance(profile_data.get("raw_profile"), dict) else {}
                     person_name = str(profile_data.get("name") or raw_profile.get("fullName") or "Unknown").strip() or "Unknown"
-
-                    enrich_art = self._artifact_store.get_artifact(job.id, "resource.linkedin.enrich")
-                    enrich = enrich_art.payload if (enrich_art is not None and isinstance(enrich_art.payload, dict)) else {}
 
                     if ct == "skills":
                         payload = enrich.get("skills") if isinstance(enrich.get("skills"), dict) else {}

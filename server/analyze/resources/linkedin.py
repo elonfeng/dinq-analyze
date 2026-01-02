@@ -669,48 +669,6 @@ def fetch_linkedin_raw_profile(
             "raw_profile": raw_profile_store,
         },
     }
-    # Frontend-only sections (non-LLM, fast defaults).
-    # These fields exist in the historical LinkedIn profile schema and should never be empty.
-    try:
-        from server.linkedin_analyzer.colleagues_view_service import create_default_colleagues_view
-        from server.linkedin_analyzer.life_well_being_service import create_default_life_well_being
-
-        base_for_defaults = raw_profile_store if raw_profile_store else raw_profile
-        report["profile_data"]["colleagues_view"] = create_default_colleagues_view(base_for_defaults, resolved_name)
-        report["profile_data"]["life_well_being"] = create_default_life_well_being(base_for_defaults, resolved_name)
-    except Exception:
-        report["profile_data"]["colleagues_view"] = {
-            "highlights": ["Professional experience", "Career progression", "Growth mindset"],
-            "areas_for_improvement": [
-                "Expand cross-functional impact",
-                "Strengthen strategic ownership",
-                "Deepen domain expertise",
-            ],
-        }
-        report["profile_data"]["life_well_being"] = {
-            "life_suggestion": {
-                "advice": (
-                    "Prioritize sustainable routines and clear boundaries to avoid burnout while maintaining momentum "
-                    "in your career."
-                ),
-                "actions": [
-                    {"emoji": "⚖️", "phrase": "Set Boundaries"},
-                    {"emoji": "📚", "phrase": "Keep Learning"},
-                    {"emoji": "❤️", "phrase": "Nurture Relationships"},
-                ],
-            },
-            "health": {
-                "advice": (
-                    "Maintain consistent sleep, regular movement, and stress-management habits to stay resilient "
-                    "under work pressure."
-                ),
-                "actions": [
-                    {"emoji": "😴", "phrase": "Sleep Schedule"},
-                    {"emoji": "🏃", "phrase": "Regular Exercise"},
-                    {"emoji": "🧘", "phrase": "Stress Management"},
-                ],
-            },
-        }
     return report
 
 
@@ -989,7 +947,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         "You are an expert LinkedIn profile analyst.\n"
         "Return ONLY valid JSON. Do not wrap in markdown.\n"
         "All text must be in English.\n"
-        "Never output 'No data' placeholders. If data is missing, infer a reasonable, conservative answer.\n"
+        "Never output 'No data' placeholders. If data is missing, infer a reasonable answer.\n"
     )
 
     user = json.dumps(
@@ -1000,7 +958,14 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                 "skills": "Return 3-6 items per list; use concise noun phrases.",
                 "career": "Keep advice specific and actionable; avoid generic clichés.",
                 "summaries": "work_experience_summary 40-60 words; education_summary 30-50 words.",
-                "money": "Return plausible but competitive ranges; follow schema strictly; explanation 50-70 words.",
+                "money": (
+                    "Be aggressive and competitive in valuation; "
+                    "level_us must be Google Lx (e.g., 'L6'); level_cn must be Alibaba Px (P = L+2). "
+                    "estimated_salary must be a USD digits range without commas (e.g., '2000000-3000000'). "
+                    "Provide a 50-70 word explanation emphasizing scarcity and premium market value."
+                ),
+                "colleagues_view": "Return 3-5 items per list; avoid placeholders; keep each bullet concise.",
+                "life_well_being": "Highly personalized to role/industry/location; provide exactly 3 actions per section; avoid generic platitudes.",
                 "about": "If profile.about is empty, generate a 40-60 word first-person about section.",
                 "tags": "Return 4-6 personal_tags (Title Case).",
             },
@@ -1029,6 +994,11 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                     "estimated_salary": "string",
                     "explanation": "string",
                 },
+                "colleagues_view": {"highlights": ["string"], "areas_for_improvement": ["string"]},
+                "life_well_being": {
+                    "life_suggestion": {"advice": "string", "actions": [{"emoji": "string", "phrase": "string"}]},
+                    "health": {"advice": "string", "actions": [{"emoji": "string", "phrase": "string"}]},
+                },
                 "summary": {"about": "string", "personal_tags": ["string"]},
             },
         },
@@ -1047,14 +1017,15 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     from server.config.llm_models import get_model
 
     model = get_model("fast", task="linkedin_enrich_bundle")
-    primary_timeout = min(float(timeout_s), 3.0) if str(model).strip().lower().startswith("groq:") else float(timeout_s)
+    # Groq routes can be extremely fast, but 3s is often too tight for larger strict-JSON bundles.
+    primary_timeout = min(float(timeout_s), 12.0) if str(model).strip().lower().startswith("groq:") else float(timeout_s)
     try:
         out = openrouter_chat(
             task="linkedin_enrich_bundle",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             model=model,
             temperature=0.3,
-            max_tokens=1400,
+            max_tokens=1800,
             expect_json=True,
             stream=False,
             cache=False,
@@ -1073,7 +1044,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 model="google/gemini-2.5-flash",
                 temperature=0.3,
-                max_tokens=1400,
+                max_tokens=1800,
                 expect_json=True,
                 stream=False,
                 cache=False,
@@ -1088,6 +1059,8 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     skills = payload.get("skills") if isinstance(payload.get("skills"), dict) else {}
     career = payload.get("career") if isinstance(payload.get("career"), dict) else {}
     money = payload.get("money") if isinstance(payload.get("money"), dict) else {}
+    colleagues_view = payload.get("colleagues_view") if isinstance(payload.get("colleagues_view"), dict) else {}
+    life_well_being = payload.get("life_well_being") if isinstance(payload.get("life_well_being"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
 
     # Ensure required non-empty about for quality gate.
@@ -1123,23 +1096,170 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         if not explanation:
             explanation = payload.get("justification") or payload.get("reasoning")
 
+        lvl_us_s = str(level_us or "").strip()
+        lvl_cn_s = str(level_cn or "").strip()
+
+        # Try to extract canonical level formats from verbose strings.
+        m_us = re.search(r"(?i)\\bL(\\d+)\\b", lvl_us_s)
+        if m_us:
+            lvl_us_s = f"L{m_us.group(1)}"
+        m_cn = re.search(r"(?i)\\bP(\\d+)\\b", lvl_cn_s)
+        if m_cn:
+            lvl_cn_s = f"P{m_cn.group(1)}"
+
+        # If only one side exists, try to infer the other via the P = L + 2 mapping.
+        try:
+            if re.match(r"^L\\d+$", lvl_us_s) and not re.match(r"^P\\d+$", lvl_cn_s):
+                lvl_cn_s = f"P{int(lvl_us_s[1:]) + 2}"
+            if re.match(r"^P\\d+$", lvl_cn_s) and not re.match(r"^L\\d+$", lvl_us_s):
+                lvl_us_s = f"L{max(0, int(lvl_cn_s[1:]) - 2)}"
+        except Exception:
+            pass
+
         salary_s = str(estimated_salary or "").strip()
         if salary_s:
             salary_s = salary_s.replace(",", "").replace("$", "").strip()
             salary_s = re.sub(r"(?i)\\busd\\b", "", salary_s).strip()
             salary_s = salary_s.replace("–", "-").replace("—", "-").replace("~", "-").replace("〜", "-").replace("～", "-")
             salary_s = re.sub(r"(?i)\\s+to\\s+", "-", salary_s).strip()
+            salary_s = salary_s.replace(" ", "").rstrip("+")
+
+            # Expand shorthand like "1.4M-2.2M" / "800K-1.2M" into digits.
+            def _token_to_int(tok: str) -> Optional[int]:
+                t = str(tok or "").strip().lower().rstrip("+")
+                if not t:
+                    return None
+                m = re.match(r"^(\\d+(?:\\.\\d+)?)([kmb])?$", t)
+                if not m:
+                    return None
+                try:
+                    num = float(m.group(1))
+                except Exception:
+                    return None
+                suf = m.group(2) or ""
+                mult = 1.0
+                if suf == "k":
+                    mult = 1_000.0
+                elif suf == "m":
+                    mult = 1_000_000.0
+                elif suf == "b":
+                    mult = 1_000_000_000.0
+                return int(num * mult)
+
+            if "-" in salary_s:
+                left, right = salary_s.split("-", 1)
+                a = _token_to_int(left)
+                b = _token_to_int(right)
+                if a is not None and b is not None:
+                    lo = min(a, b)
+                    hi = max(a, b)
+                    salary_s = f"{lo}-{hi}"
         expl_s = str(explanation or "").strip()
 
         return {
             "years_of_experience": years,
-            "level_us": level_us,
-            "level_cn": level_cn,
+            "level_us": lvl_us_s or None,
+            "level_cn": lvl_cn_s or None,
             "estimated_salary": salary_s,
             "explanation": expl_s,
         }
 
     money = _normalize_money(money)
+
+    def _money_valid(m: Dict[str, Any]) -> bool:
+        lvl_us = str(m.get("level_us") or "").strip()
+        lvl_cn = str(m.get("level_cn") or "").strip()
+        if not re.match(r"^L\\d+$", lvl_us):
+            return False
+        if not re.match(r"^P\\d+$", lvl_cn):
+            return False
+        salary = str(m.get("estimated_salary") or "").strip()
+        if salary and not re.match(r"^\\d{3,}-\\d{3,}$", salary):
+            return False
+        return True
+
+    if not _money_valid(money):
+        try:
+            from server.linkedin_analyzer.money_service import create_default_money_analysis
+
+            money = _normalize_money(create_default_money_analysis(raw_profile, person_name))
+        except Exception:
+            pass
+
+    def _clean_str_list(value: Any, *, limit: int) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            s = str(item or "").strip()
+            if not s:
+                continue
+            k = s.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(s)
+            if len(out) >= int(limit):
+                break
+        return out
+
+    def _normalize_actions(value: Any) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        out: list[dict] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            emoji = str(item.get("emoji") or "").strip()
+            phrase = str(item.get("phrase") or "").strip()
+            if not phrase:
+                continue
+            if not emoji:
+                emoji = "✨"
+            out.append({"emoji": emoji, "phrase": phrase})
+            if len(out) >= 3:
+                break
+        return out
+
+    # Ensure these legacy sections always exist and have non-empty content for UI rendering.
+    if not isinstance(colleagues_view, dict):
+        colleagues_view = {}
+    highlights = _clean_str_list(colleagues_view.get("highlights"), limit=6)
+    improvements = _clean_str_list(colleagues_view.get("areas_for_improvement"), limit=6)
+    if not highlights or not improvements:
+        try:
+            from server.linkedin_analyzer.colleagues_view_service import create_default_colleagues_view
+
+            colleagues_view = create_default_colleagues_view(raw_profile, person_name)
+        except Exception:
+            colleagues_view = {"highlights": highlights, "areas_for_improvement": improvements}
+    else:
+        colleagues_view = {"highlights": highlights, "areas_for_improvement": improvements}
+
+    if not isinstance(life_well_being, dict):
+        life_well_being = {}
+    ls = life_well_being.get("life_suggestion") if isinstance(life_well_being.get("life_suggestion"), dict) else {}
+    health = life_well_being.get("health") if isinstance(life_well_being.get("health"), dict) else {}
+    ls_advice = str(ls.get("advice") or "").strip()
+    h_advice = str(health.get("advice") or "").strip()
+    ls_actions = _normalize_actions(ls.get("actions"))
+    h_actions = _normalize_actions(health.get("actions"))
+    if not ls_advice or not h_advice or len(ls_actions) < 3 or len(h_actions) < 3:
+        try:
+            from server.linkedin_analyzer.life_well_being_service import create_default_life_well_being
+
+            life_well_being = create_default_life_well_being(raw_profile, person_name)
+        except Exception:
+            life_well_being = {
+                "life_suggestion": {"advice": ls_advice, "actions": ls_actions},
+                "health": {"advice": h_advice, "actions": h_actions},
+            }
+    else:
+        life_well_being = {
+            "life_suggestion": {"advice": ls_advice, "actions": ls_actions},
+            "health": {"advice": h_advice, "actions": h_actions},
+        }
 
     # Best-effort: if model fails to produce any skills lists, provide a minimal placeholder list
     # so the card completes (quality gate accepts fallback meta if needed downstream).
@@ -1287,6 +1407,8 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         "education_summary": edu_summary,
         "money": money,
         "money_analysis": money,
+        "colleagues_view": colleagues_view,
+        "life_well_being": life_well_being,
         "summary": {"about": about, "personal_tags": personal_tags},
         "role_model": role_model,
     }
