@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -67,6 +68,98 @@ class CachedRun:
 
 
 class AnalysisCacheStore:
+    def _access_touch_throttle_seconds(self) -> int:
+        """
+        How frequently we update (last_access_at, hit_count) per artifact.
+
+        Goal: enable LRU/hot-cold eviction without adding too much write overhead.
+        """
+
+        return 15
+
+    def _payload_size_bytes(self, payload: Dict[str, Any]) -> int:
+        try:
+            raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        except Exception:
+            return 0
+        return int(len(raw))
+
+    def _merge_access_meta_on_write(
+        self,
+        *,
+        existing_meta: Optional[Dict[str, Any]],
+        incoming_meta: Optional[Dict[str, Any]],
+        payload: Dict[str, Any],
+        now: datetime,
+    ) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        if isinstance(existing_meta, dict):
+            merged.update(existing_meta)
+        if isinstance(incoming_meta, dict):
+            merged.update(incoming_meta)
+
+        try:
+            merged["hit_count"] = int(merged.get("hit_count") or 0)
+        except Exception:
+            merged["hit_count"] = 0
+
+        now_utc = now.replace(tzinfo=timezone.utc)
+        merged["last_access_at"] = now_utc.isoformat()
+        merged["last_access_at_s"] = int(now_utc.timestamp())
+        if "payload_size_bytes" not in merged:
+            merged["payload_size_bytes"] = self._payload_size_bytes(payload)
+        return merged
+
+    def _maybe_touch_access_meta(self, *, session, artifact: AnalysisArtifactCache) -> None:  # type: ignore[no-untyped-def]
+        """
+        Best-effort: update last_access_at/hit_count for eviction.
+
+        IMPORTANT: This must not raise or block callers on errors.
+        """
+
+        try:
+            ak = str(getattr(artifact, "artifact_key", "") or "").strip()
+        except Exception:
+            ak = ""
+        if not ak:
+            return
+
+        now_s = int(time.time())
+        now_iso = datetime.utcfromtimestamp(now_s).replace(tzinfo=timezone.utc).isoformat()
+        throttle_s = max(0, int(self._access_touch_throttle_seconds()))
+
+        meta = getattr(artifact, "meta", None)
+        if not isinstance(meta, dict):
+            meta = {}
+
+        last_s = 0
+        try:
+            last_s = int(meta.get("last_access_at_s") or 0)
+        except Exception:
+            last_s = 0
+
+        if throttle_s > 0 and last_s > 0 and (now_s - last_s) < throttle_s:
+            return
+
+        try:
+            hit_count = int(meta.get("hit_count") or 0) + 1
+        except Exception:
+            hit_count = 1
+
+        meta["hit_count"] = int(hit_count)
+        meta["last_access_at"] = now_iso
+        meta["last_access_at_s"] = int(now_s)
+        if "payload_size_bytes" not in meta:
+            payload = getattr(artifact, "payload", None)
+            if isinstance(payload, dict) and payload:
+                meta["payload_size_bytes"] = self._payload_size_bytes(payload)
+
+        artifact.meta = meta
+        try:
+            session.flush()
+        except Exception:
+            return
+
     def _backup_read_through_enabled(self) -> bool:
         """
         Whether cache reads should fall back to the remote backup DB when local cache misses.
@@ -156,15 +249,21 @@ class AnalysisCacheStore:
             with get_cache_db_session() as session:
                 existing = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == ak).first()
                 if existing is None:
+                    now = datetime.utcnow()
                     session.add(
                         AnalysisArtifactCache(
                             artifact_key=ak,
                             kind=str(getattr(artifact, "kind", "") or ""),
                             payload=payload,
                             content_hash=str(getattr(artifact, "content_hash", "") or "") or None,
-                            created_at=getattr(artifact, "created_at", None) or datetime.utcnow(),
+                            created_at=getattr(artifact, "created_at", None) or now,
                             expires_at=getattr(artifact, "expires_at", None),
-                            meta=getattr(artifact, "meta", None) if isinstance(getattr(artifact, "meta", None), dict) else {},
+                            meta=self._merge_access_meta_on_write(
+                                existing_meta=None,
+                                incoming_meta=getattr(artifact, "meta", None) if isinstance(getattr(artifact, "meta", None), dict) else {},
+                                payload=payload,
+                                now=now,
+                            ),
                         )
                     )
                 else:
@@ -176,7 +275,18 @@ class AnalysisCacheStore:
                         existing.content_hash = incoming_hash
                         existing.created_at = getattr(artifact, "created_at", None) or getattr(existing, "created_at", None) or datetime.utcnow()
                         existing.expires_at = getattr(artifact, "expires_at", None)
-                        existing.meta = getattr(artifact, "meta", None) if isinstance(getattr(artifact, "meta", None), dict) else (existing.meta or {})
+                        existing.meta = self._merge_access_meta_on_write(
+                            existing_meta=existing.meta if isinstance(getattr(existing, "meta", None), dict) else {},
+                            incoming_meta=getattr(artifact, "meta", None) if isinstance(getattr(artifact, "meta", None), dict) else {},
+                            payload=payload,
+                            now=datetime.utcnow(),
+                        )
+                    else:
+                        # Even if payload is unchanged, this read-through should still count as an access.
+                        try:
+                            self._maybe_touch_access_meta(session=session, artifact=existing)
+                        except Exception:
+                            pass
                 session.flush()
         except Exception:
             return
@@ -366,6 +476,11 @@ class AnalysisCacheStore:
                 return None
 
             payload = art.payload if isinstance(art.payload, dict) else None
+            if isinstance(payload, dict) and payload:
+                try:
+                    self._maybe_touch_access_meta(session=session, artifact=art)
+                except Exception:
+                    pass
             # Best-effort: populate SQLite L1 so cache hits can avoid DB.
             try:
                 cache = get_sqlite_cache()
@@ -427,10 +542,20 @@ class AnalysisCacheStore:
         )
 
         now = datetime.utcnow()
-        art: Optional[AnalysisArtifactCache]
+        art: Optional[AnalysisArtifactCache] = None
         try:
             with get_cache_db_session() as session:
                 art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
+                if art is not None:
+                    expires_at = getattr(art, "expires_at", None)
+                    if expires_at and isinstance(expires_at, datetime) and expires_at <= now:
+                        session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).delete()
+                        art = None
+                    else:
+                        try:
+                            self._maybe_touch_access_meta(session=session, artifact=art)
+                        except Exception:
+                            pass
         except Exception:
             art = None
 
@@ -443,16 +568,6 @@ class AnalysisCacheStore:
                 return None
             self._rehydrate_local_artifact_cache(artifact=backup_art)
             art = backup_art
-
-        expires_at = getattr(art, "expires_at", None)
-        if expires_at and isinstance(expires_at, datetime) and expires_at <= now:
-            # Best-effort cleanup.
-            try:
-                with get_cache_db_session() as session:
-                    session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).delete()
-            except Exception:
-                pass
-            return None
 
         return art.payload if isinstance(getattr(art, "payload", None), dict) else None
 
@@ -488,10 +603,15 @@ class AnalysisCacheStore:
         )
 
         now = datetime.utcnow()
-        art: Optional[AnalysisArtifactCache]
+        art: Optional[AnalysisArtifactCache] = None
         try:
             with get_cache_db_session() as session:
                 art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
+                if art is not None and isinstance(getattr(art, "payload", None), dict):
+                    try:
+                        self._maybe_touch_access_meta(session=session, artifact=art)
+                    except Exception:
+                        pass
         except Exception:
             art = None
 
@@ -580,7 +700,7 @@ class AnalysisCacheStore:
                     content_hash=content_hash,
                     created_at=now,
                     expires_at=expires_at,
-                    meta=meta or {},
+                    meta=self._merge_access_meta_on_write(existing_meta=None, incoming_meta=meta or {}, payload=payload, now=now),
                 )
                 session.add(art)
             else:
@@ -589,7 +709,7 @@ class AnalysisCacheStore:
                 art.content_hash = content_hash
                 art.created_at = now
                 art.expires_at = expires_at
-                art.meta = meta or (art.meta or {})
+                art.meta = self._merge_access_meta_on_write(existing_meta=art.meta or {}, incoming_meta=meta or {}, payload=payload, now=now)
 
             self._enqueue_backup_outbox(session=session, artifact_key=str(artifact_key), kind=str(k), content_hash=str(content_hash))
             session.flush()
@@ -631,7 +751,7 @@ class AnalysisCacheStore:
                     content_hash=content_hash,
                     created_at=now,
                     expires_at=expires_at,
-                    meta=meta or {},
+                    meta=self._merge_access_meta_on_write(existing_meta=None, incoming_meta=meta or {}, payload=payload, now=now),
                 )
                 session.add(art)
             else:
@@ -640,7 +760,7 @@ class AnalysisCacheStore:
                 art.content_hash = content_hash
                 art.created_at = now
                 art.expires_at = expires_at
-                art.meta = meta or (art.meta or {})
+                art.meta = self._merge_access_meta_on_write(existing_meta=art.meta or {}, incoming_meta=meta or {}, payload=payload, now=now)
 
             self._enqueue_backup_outbox(session=session, artifact_key=str(artifact_key), kind="full_report", content_hash=str(content_hash))
 
@@ -770,7 +890,7 @@ class AnalysisCacheStore:
                     content_hash=content_hash,
                     created_at=now,
                     expires_at=expires_at,
-                    meta=meta or {},
+                    meta=self._merge_access_meta_on_write(existing_meta=None, incoming_meta=meta or {}, payload=payload, now=now),
                 )
                 session.add(art)
             else:
@@ -779,7 +899,7 @@ class AnalysisCacheStore:
                 art.content_hash = content_hash
                 art.created_at = now
                 art.expires_at = expires_at
-                art.meta = meta or (art.meta or {})
+                art.meta = self._merge_access_meta_on_write(existing_meta=art.meta or {}, incoming_meta=meta or {}, payload=payload, now=now)
 
             self._enqueue_backup_outbox(session=session, artifact_key=str(artifact_key), kind="final_result", content_hash=str(content_hash))
 

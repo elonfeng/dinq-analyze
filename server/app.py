@@ -169,6 +169,14 @@ try:
 except Exception:
     pass
 
+# Local-first analysis: keep local SQLite cache bounded (best-effort).
+try:
+    from server.tasks.local_cache_eviction import start_local_cache_evictor
+
+    start_local_cache_evictor()
+except Exception:
+    pass
+
 # Store active sessions
 active_sessions: Dict[str, Dict[str, Any]] = {}
 
