@@ -262,6 +262,15 @@ def refine_conference_distribution(dist_dict, preferred_acronyms):
 def transform_data(source_data):
     """Transforms the source JSON data structure to the target structure."""
 
+    def _as_dict(value: Any) -> Dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    def _as_list(value: Any) -> List[Any]:
+        return value if isinstance(value, list) else []
+
+    if not isinstance(source_data, dict):
+        source_data = {}
+
     # (Keep the initialization of target_data as before)
     target_data = {
         "researcherProfile": {
@@ -319,14 +328,14 @@ def transform_data(source_data):
     }
 
     # --- Populate Researcher Info (Added avatar and description) ---
-    researcher_src = source_data.get('researcher', {})
+    researcher_src = _as_dict(source_data.get('researcher'))
     researcher_info_target = target_data['researcherProfile']['researcherInfo']
 
     # Get researcher name for avatar and description
-    researcher_name = researcher_src.get('name', '')
+    researcher_name = str(researcher_src.get('name') or '')
 
     # Add avatar and description fields
-    avatar_url = source_data.get('researcher', {}).get('avatar')
+    avatar_url = researcher_src.get('avatar')
 
     # 如果有 avatar URL，检查其域名前缀是否与当前环境的 BASE_URL 匹配
     if avatar_url:
@@ -350,7 +359,7 @@ def transform_data(source_data):
     if not avatar_url:
         avatar_url = get_random_avatar()
 
-    description = source_data.get('researcher', {}).get('description')
+    description = researcher_src.get('description')
     if not description and researcher_name:
         description = get_random_description(researcher_name)
     elif not description:
@@ -361,29 +370,31 @@ def transform_data(source_data):
     researcher_info_target['abbreviatedName'] = researcher_src.get('abbreviated_name')
     researcher_info_target['affiliation'] = researcher_src.get('affiliation')
     researcher_info_target['email'] = researcher_src.get('email')
-    researcher_info_target['researchFields'] = researcher_src.get('research_fields', [])
+    researcher_info_target['researchFields'] = _as_list(researcher_src.get('research_fields'))
     researcher_info_target['totalCitations'] = clean_number(researcher_src.get('total_citations'))
     researcher_info_target['citations5y'] = clean_number(researcher_src.get('citations_5y'))
     researcher_info_target['hIndex'] = clean_number(researcher_src.get('h_index'))
     researcher_info_target['hIndex5y'] = clean_number(researcher_src.get('h_index_5y'))
-    researcher_info_target['yearlyCitations'] = {str(k): clean_number(v) for k, v in researcher_src.get('yearly_citations', {}).items()}
+    yearly_citations_src = _as_dict(researcher_src.get('yearly_citations'))
+    researcher_info_target['yearlyCitations'] = {str(k): clean_number(v) for k, v in yearly_citations_src.items()}
     researcher_info_target['avatar'] = avatar_url
     researcher_info_target['description'] = description
     researcher_info_target['scholarId'] = researcher_src.get('scholar_id')
 
     # --- Populate Publication Stats Block (Same as before) ---
-    pub_stats_src = source_data.get('publication_stats', {})
+    pub_stats_src = _as_dict(source_data.get('publication_stats'))
     pub_stats_target = target_data['researcherProfile']['dataBlocks']['publicationStats']
     pub_stats_target['totalPapers'] = clean_number(pub_stats_src.get('total_papers'))
     pub_stats_target['totalCitations'] = researcher_info_target['totalCitations']
     pub_stats_target['hIndex'] = researcher_info_target['hIndex']
     pub_stats_target['yearlyCitations'] = researcher_info_target['yearlyCitations']
-    pub_stats_target['yearlyPapers'] = {str(k): clean_number(v) for k, v in pub_stats_src.get('year_distribution', {}).items()}
+    yearly_papers_src = _as_dict(pub_stats_src.get('year_distribution'))
+    pub_stats_target['yearlyPapers'] = {str(k): clean_number(v) for k, v in yearly_papers_src.items()}
 
 
     # --- Populate Publication Insight Block (MODIFIED PART) ---
     pub_insight_target = target_data['researcherProfile']['dataBlocks']['publicationInsight']
-    coauthor_stats_src = source_data.get('coauthor_stats', {})
+    coauthor_stats_src = _as_dict(source_data.get('coauthor_stats'))
 
     pub_insight_target['totalPapers'] = pub_stats_target['totalPapers']
     pub_insight_target['topTierPapers'] = clean_number(pub_stats_src.get('top_tier_papers'))
@@ -393,7 +404,7 @@ def transform_data(source_data):
     pub_insight_target['lastAuthorPapers'] = clean_number(pub_stats_src.get('last_author_papers'))
 
     # *** Use the new refining function ***
-    raw_conf_dist = pub_stats_src.get('conference_distribution', {})
+    raw_conf_dist = _as_dict(pub_stats_src.get('conference_distribution'))
     pub_insight_target['conferenceDistribution'] = refine_conference_distribution(
         raw_conf_dist, PREFERRED_CONFERENCE_ACRONYMS
     )
@@ -420,7 +431,7 @@ def transform_data(source_data):
         # 创建以自己为角色模型的字典
         role_model_src = {
             "name": researcher_name,
-            "institution": source_data.get('researcher', {}).get('affiliation', ''),
+            "institution": researcher_src.get('affiliation', ''),
             "position": "Established Researcher",
             "photo_url": avatar_url,
             "achievement": representative_work,
@@ -456,7 +467,7 @@ def transform_data(source_data):
 
 
     # --- Populate Closest Collaborator Block (Added avatar field) ---
-    collaborator_src = source_data.get('most_frequent_collaborator', {})
+    collaborator_src = _as_dict(source_data.get('most_frequent_collaborator'))
     collaborator_target = target_data['researcherProfile']['dataBlocks']['closestCollaborator']
 
     # Check if there is a valid collaborator
@@ -464,7 +475,7 @@ def transform_data(source_data):
 
     collaborator_target['fullName'] = collaborator_src.get('full_name')
     collaborator_target['affiliation'] = collaborator_src.get('affiliation')
-    collaborator_target['researchInterests'] = collaborator_src.get('research_interests', [])
+    collaborator_target['researchInterests'] = _as_list(collaborator_src.get('research_interests'))
     collaborator_target['scholarId'] = collaborator_src.get('scholar_id')
     collaborator_target['coauthoredPapers'] = clean_number(collaborator_src.get('coauthored_papers'))
 
@@ -474,7 +485,7 @@ def transform_data(source_data):
     else:
         collaborator_target['avatar'] = None
 
-    best_paper_src = collaborator_src.get('best_paper', {})
+    best_paper_src = _as_dict(collaborator_src.get('best_paper'))
     best_paper_venue = best_paper_src.get('venue')
     best_paper_title = best_paper_src.get('title')
     best_paper_year = clean_year(best_paper_src.get('year'))
@@ -518,7 +529,7 @@ def transform_data(source_data):
     earnings = clean_number(source_data.get('earnings_per_year'), return_type=int)
 
     # 如果没有 earnings_per_year 或者为空，尝试从 level_info.earnings 获取
-    level_info_src = source_data.get('level_info', {})
+    level_info_src = _as_dict(source_data.get('level_info'))
     # if earnings is None and level_info_src:
     #     # earnings = clean_number(level_info_src.get('earnings'), return_type=int)
     earnings = level_info_src.get('earnings')
@@ -539,13 +550,13 @@ def transform_data(source_data):
     character_target = target_data['researcherProfile']['dataBlocks']['researcherCharacter']
 
     # 首先从level_info中获取评估数据，这是优先数据源
-    level_info = source_data.get('level_info', {})
-    evaluation_bars = level_info.get('evaluation_bars', {})
+    level_info = _as_dict(source_data.get('level_info'))
+    evaluation_bars = _as_dict(level_info.get('evaluation_bars'))
 
     # 只有当level_info中没有evaluation_bars时，才使用research_style
     if not evaluation_bars:
         logger.info("No evaluation_bars found in level_info, falling back to research_style")
-        style_src = source_data.get('research_style', {})
+        style_src = _as_dict(source_data.get('research_style'))
     else:
         logger.info(f"Using evaluation_bars from level_info as primary data source: {evaluation_bars}")
         style_src = evaluation_bars
@@ -613,9 +624,9 @@ def transform_data(source_data):
 
 
     # --- Populate Paper of Year Block ---
-    pub_stats = source_data.get('publication_stats', {})
+    pub_stats = _as_dict(source_data.get('publication_stats'))
     paper_of_year_target = target_data['researcherProfile']['dataBlocks']['paperOfYear']
-    paper_of_year_src = pub_stats.get('paper_of_year') or source_data.get('paper_of_year')
+    paper_of_year_src = _as_dict(pub_stats.get('paper_of_year') or source_data.get('paper_of_year'))
 
     if paper_of_year_src:
         paper_of_year_venue = paper_of_year_src.get('venue')
@@ -658,11 +669,11 @@ def transform_data(source_data):
 
     # --- Populate Representative Paper Block (Modified to use conference matcher) ---
     # 首先尝试从 publication_stats 中获取 most_cited_paper
-    rep_paper_src = pub_stats.get('most_cited_paper', {})
+    rep_paper_src = _as_dict(pub_stats.get('most_cited_paper'))
 
     # 如果在 publication_stats 中没有找到，尝试从根级别获取
     if not rep_paper_src:
-        rep_paper_src = source_data.get('most_cited_paper', {})
+        rep_paper_src = _as_dict(source_data.get('most_cited_paper'))
         logger.info(f"Using most_cited_paper from root level: {rep_paper_src}")
     else:
         logger.info(f"Using most_cited_paper from publication_stats: {rep_paper_src}")

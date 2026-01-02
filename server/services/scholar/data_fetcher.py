@@ -673,7 +673,42 @@ class ScholarDataFetcher:
                     scholar_data['name'] = self.scholar_name
                     scholar_data['abbreviated_name'] = self.scholar_name  # 直接使用完整名字
                 else:
-                    logger.warning("Could not find scholar name element")
+                    # This usually means the response is not a Scholar profile page (captcha/consent/404/etc).
+                    try:
+                        html_lower = html_content.lower()
+                    except Exception:  # noqa: BLE001
+                        html_lower = ""
+
+                    reason = "non_profile_page"
+                    if any(
+                        token in html_lower
+                        for token in (
+                            "unusual traffic",
+                            "automated queries",
+                            "sorry, but your computer or network may be sending automated queries",
+                            "detected unusual traffic",
+                            "our systems have detected unusual traffic",
+                            "not a robot",
+                            "recaptcha",
+                            "consent.google.com",
+                        )
+                    ):
+                        reason = "blocked_or_consent"
+
+                    snippet = ""
+                    try:
+                        snippet = re.sub(r"\\s+", " ", str(html_content)[:500]).strip()
+                    except Exception:  # noqa: BLE001
+                        snippet = ""
+
+                    logger.warning(
+                        "Could not find scholar name element (page=%s, first_page=%s, reason=%s, html_len=%s, snippet=%s)",
+                        page_index,
+                        first_page,
+                        reason,
+                        len(html_content) if isinstance(html_content, str) else None,
+                        snippet,
+                    )
                     return None
 
                 # Scholar affiliation
