@@ -1311,14 +1311,31 @@ def analyze():
             _job_store.release_ready_cards(job_id)
         except Exception:
             pass
-    job = _job_store.get_job(job_id) if (not created) else None
+    # Always read back the job status after init_scheduler(). This keeps the create response
+    # consistent with the subsequent /jobs/<job_id> snapshot (and avoids confusing "queued" when
+    # the scheduler already flipped the job to "running" within the same second).
+    try:
+        job = _job_store.get_job(job_id)
+    except Exception:
+        job = None
+    status = (getattr(job, "status", None) if job is not None else None) or "queued"
+    # Best-effort: jobs can become running/completed almost immediately (cache, fast page0, etc.).
+    # A tiny grace window reduces "queued" flicker without materially impacting create latency.
+    if status == "queued":
+        try:
+            time.sleep(0.05)
+            job2 = _job_store.get_job(job_id)
+            status2 = (getattr(job2, "status", None) if job2 is not None else None) or status
+            status = status2 or status
+        except Exception:
+            pass
     return jsonify(
         {
             "success": True,
             "source": source,
             "job_id": job_id,
             "subject_key": subject_key,
-            "status": (getattr(job, "status", None) if job is not None else "queued") or "queued",
+            "status": status,
             "idempotent_replay": (not created) if idempotency_key else False,
         }
     )
