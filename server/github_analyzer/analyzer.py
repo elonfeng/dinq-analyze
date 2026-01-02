@@ -442,25 +442,41 @@ class GitHubAnalyzer:
             },
         ])
         parsed = self.load_json(repair_json(result), {})
-        if isinstance(parsed, dict) and parsed.get("name") and parsed.get("github"):
-            return parsed
+        if isinstance(parsed, dict):
+            name = str(parsed.get("name") or "").strip()
+            github = str(parsed.get("github") or "").strip()
+            if name and github:
+                return parsed
 
-        # Fallback: return a minimal, non-empty object to avoid caching empty role_model.
-        user = input_data.get("user") if isinstance(input_data, dict) else None
-        if not isinstance(user, dict):
-            user = {}
-        github_url = str(user.get("url") or "").strip()
-        name = str(user.get("name") or user.get("login") or "Unknown").strip()
-        if not github_url and user.get("login"):
-            github_url = f"https://github.com/{user.get('login')}"
+            # Best-effort: fill missing fields by looking up the dev_pioneers table.
+            try:
+                pioneers = self.dev_pioneers_data if isinstance(self.dev_pioneers_data, list) else []
+            except Exception:
+                pioneers = []
 
-        return {
-            "name": name or "Unknown",
-            "github": github_url,
-            "similarity_score": 0,
-            "reason": "Role model unavailable (fallback).",
-            "achievement": "",
-        }
+            if pioneers:
+                if name and not github:
+                    for p in pioneers:
+                        if not isinstance(p, dict):
+                            continue
+                        if str(p.get("name") or "").strip().lower() == name.lower():
+                            parsed["github"] = p.get("github")
+                            if not str(parsed.get("achievement") or "").strip():
+                                parsed["achievement"] = p.get("famous_work") or ""
+                            return parsed
+
+                if github and not name:
+                    for p in pioneers:
+                        if not isinstance(p, dict):
+                            continue
+                        if str(p.get("github") or "").strip().lower() == github.lower():
+                            parsed["name"] = p.get("name")
+                            if not str(parsed.get("achievement") or "").strip():
+                                parsed["achievement"] = p.get("famous_work") or ""
+                            return parsed
+
+        # No valid external role model could be generated; let callers decide fallback strategy.
+        return {}
 
     async def ai_valuation_and_level(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """生成估值和级别分析"""

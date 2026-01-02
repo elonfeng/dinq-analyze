@@ -15,8 +15,6 @@ import requests
 from server.github_analyzer.github_client import GithubClient
 from server.github_analyzer.analyzer import parse_github_datetime
 from server.github_analyzer.github_queries import MostPullRequestRepositoriesQuery
-from server.llm.gateway import openrouter_chat
-from server.config.llm_models import get_model
 from server.utils.timing import elapsed_ms, now_perf
 
 
@@ -920,10 +918,10 @@ def run_github_enrich_bundle(
     mode: str = "fast",
 ) -> Dict[str, Any]:
     """
-    Fused GitHub enrichment in a single LLM call.
+    GitHub enrichment aligned to upstream `GitHubAnalyzer` outputs.
 
-    Output is shaped like a partial full_report so that:
-      - extract_card_payload("github", payload, "repos"/"role_model"/"roast"/"summary") works.
+    Output is shaped like a partial full_report so:
+      - `extract_card_payload("github", payload, "repos"/"role_model"/"roast"/"summary")` works.
     """
 
     def emit(step: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
@@ -1042,217 +1040,182 @@ def run_github_enrich_bundle(
     except Exception:
         pr_total = 0
 
-    llm_input = {
-        "login": str(user.get("login") or login),
-        "user": {
-            "name": user.get("name"),
-            "bio": user.get("bio"),
-            "createdAt": user.get("createdAt"),
-            "url": user.get("url"),
-            "issues_total": (user.get("issues") or {}).get("totalCount") if isinstance(user.get("issues"), dict) else None,
-            "pull_requests_total": (user.get("pullRequests") or {}).get("totalCount") if isinstance(user.get("pullRequests"), dict) else None,
-            "repos_total": (user.get("repositories") or {}).get("totalCount") if isinstance(user.get("repositories"), dict) else None,
-        },
-        "overview": overview,
-        "code_contribution": code,
-        "feature_project": {
-            "name": feature_project.get("name"),
-            "nameWithOwner": feature_project.get("nameWithOwner"),
-            "url": feature_project.get("url"),
-            "description": feature_project.get("description"),
-            "stargazerCount": feature_project.get("stargazerCount"),
-            "forkCount": feature_project.get("forkCount"),
-        },
-        "top_projects": top_projects[:10],
-        "pull_request_candidates": candidates,
-    }
+    from server.api.github_analyzer_api import get_analyzer
 
-    system = (
-        "You are an expert GitHub developer analyst.\n"
-        "Given a compact profile + contribution summary, produce structured outputs for a UI.\n\n"
-        "Return ONLY valid JSON. Do not wrap in markdown (no ``` fences).\n"
-        "Return ONLY valid JSON with keys:\n"
-        "description, valuation_and_level, role_model, roast, most_valuable_pull_request, feature_project_tags.\n\n"
-        "Rules:\n"
-        "- description: 1-2 sentences.\n"
-        "- valuation_and_level must include:\n"
-        "  - level: one of L3/L4/L5/L6/L7/L8\n"
-        "  - salary_range: string range in USD (e.g. \"$190k-$320k\")\n"
-        "  - total_compensation: string range in USD (e.g. \"$240k-$480k\")\n"
-        "  - industry_ranking: float in (0,1] representing percentile (0.05 = top 5%)\n"
-        "  - growth_potential: one of High/Medium/Low\n"
-        "  - reasoning: 1-2 sentences\n"
-        "- role_model must be an object with: name, github (optional), similarity_score (0-1), reason.\n"
-        "- roast: 1 short paragraph (keep it playful but not offensive).\n"
-        "- most_valuable_pull_request must be an object with: repository, url, title, additions, deletions, reason, impact.\n"
-        "- feature_project_tags: 3-6 short tags.\n"
-        "If some fields are unknown, make best-effort guesses but keep them plausible.\n"
-    )
+    analyzer = get_analyzer()
+
+    # Keep LLM input small/stable: PR node list is huge.
+    ai_input: Dict[str, Any] = dict(base or {})
+    ai_input.pop("_pull_requests", None)
+
+    # Run upstream analyzer calls (parallel).
+    try:
+        per_task_timeout = max(3.0, min(float(timeout_seconds), 60.0))
+    except Exception:
+        per_task_timeout = 10.0 if fast_mode else 60.0
 
     emit(
         "ai_enrich",
-        "Generating GitHub enrich bundle...",
-        {"timeout_seconds": timeout_seconds, "mode": ("fast" if fast_mode else "background"), "pr_candidates": len(candidates)},
+        "Running GitHub AI analysis (upstream-aligned)...",
+        {
+            "mode": ("fast" if fast_mode else "background"),
+            "timeout_seconds": timeout_seconds,
+            "per_task_timeout_seconds": per_task_timeout,
+            "pr_candidates": len(candidates),
+        },
     )
 
-    llm_status = "ok"
+    async def run() -> Dict[str, Any]:
+        user_tags_coro = analyzer.safe_ai_call(asyncio.wait_for(analyzer.ai_user_tags(login), timeout=per_task_timeout), "user_tags", [])
+        repo_tags_coro = analyzer.safe_ai_call(asyncio.wait_for(analyzer.ai_repository_tags(feature_project), timeout=per_task_timeout), "repository_tags", [])
+        most_pr_coro = analyzer.safe_ai_call(asyncio.wait_for(analyzer.ai_most_valuable_pull_request(candidates), timeout=per_task_timeout), "most_valuable_pr", {})
+        valuation_coro = analyzer.safe_ai_call(asyncio.wait_for(analyzer.ai_valuation_and_level(ai_input), timeout=per_task_timeout), "valuation_and_level", {})
+        role_model_coro = analyzer.safe_ai_call(asyncio.wait_for(analyzer.ai_role_model(ai_input), timeout=per_task_timeout), "role_model", {})
+        roast_coro = analyzer.safe_ai_call(asyncio.wait_for(analyzer.ai_roast(ai_input), timeout=per_task_timeout), "roast", "")
+
+        user_tags, repo_tags, most_pr, valuation, role_model, roast = await asyncio.gather(
+            user_tags_coro,
+            repo_tags_coro,
+            most_pr_coro,
+            valuation_coro,
+            role_model_coro,
+            roast_coro,
+        )
+
+        return {
+            "user_tags": user_tags,
+            "repo_tags": repo_tags,
+            "most_pr": most_pr,
+            "valuation": valuation,
+            "role_model": role_model,
+            "roast": roast,
+        }
+
+    results: Dict[str, Any] = {}
     try:
-        if fast_mode and _bool_env("DINQ_GITHUB_ENRICH_FAST_SKIP_LLM", default=False):
-            llm_out = None
-            llm_status = "skipped"
-        else:
-            primary_model = get_model("fast", task="github_enrich_bundle") if fast_mode else get_model("balanced", task="github_enrich_bundle")
-            # Best-effort reliability: if primary (often Groq) fails/returns non-JSON, fall back to Gemini Flash.
-            fallback_model = "google/gemini-2.5-flash"
-            primary_timeout = min(float(timeout_seconds), 3.0) if str(primary_model).strip().lower().startswith("groq:") else float(timeout_seconds)
-            fallback_timeout = float(timeout_seconds)
-            if fast_mode:
-                fallback_timeout = max(fallback_timeout, 25.0)
-
-            llm_out = openrouter_chat(
-                task="github_enrich_bundle",
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, separators=(",", ":"))},
-                ],
-                model=primary_model,
-                temperature=0.2,
-                max_tokens=900 if fast_mode else 1100,
-                expect_json=True,
-                stream=False,
-                cache=False,
-                timeout_seconds=primary_timeout,
-            )
-            if not isinstance(llm_out, dict) or not llm_out:
-                llm_out = openrouter_chat(
-                    task="github_enrich_bundle",
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False, separators=(",", ":"))},
-                    ],
-                    model=fallback_model,
-                    temperature=0.2,
-                    max_tokens=900 if fast_mode else 1100,
-                    expect_json=True,
-                    stream=False,
-                    cache=False,
-                    timeout_seconds=fallback_timeout,
-                )
-    except requests.exceptions.Timeout:
-        llm_out = None
-        llm_status = "timeout"
+        results = asyncio.run(run())
     except Exception:
-        llm_out = None
-        llm_status = "error"
-
-    payload = llm_out if isinstance(llm_out, dict) else {}
-    if not payload:
-        llm_status = llm_status if llm_status != "ok" else "invalid"
+        results = {}
 
     # Normalize + harden (avoid retries due to missing fields).
-    desc = str(payload.get("description") or "").strip()
+    desc = str(ai_input.get("description") or "").strip()
     if not desc:
-        overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
         try:
-            prs_total = int(((base.get("user") or {}) if isinstance(base.get("user"), dict) else {}).get("pullRequests", {}).get("totalCount") or 0)
-        except Exception:
-            prs_total = 0
-        try:
-            stars = int(overview.get("stars") or 0)
+            stars = int((overview or {}).get("stars") or 0)
         except Exception:
             stars = 0
         years = overview.get("work_experience")
         ytxt = f"{years}y exp" if isinstance(years, int) and years > 0 else "experienced"
-        if prs_total > 0 or stars > 0:
-            desc = f"{login}: {ytxt}, {prs_total} PRs, {stars} stars."
+        if pr_total > 0 or stars > 0:
+            desc = f"{login}: {ytxt}, {pr_total} PRs, {stars} stars."
         else:
             desc = f"{login}: GitHub profile summary."
 
-    valuation = payload.get("valuation_and_level") if isinstance(payload.get("valuation_and_level"), dict) else {}
-    level = _coerce_level(valuation.get("level"))
-    if not level:
-        overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
-        try:
-            exp_years = int(overview.get("work_experience") or 0)
-        except Exception:
-            exp_years = 0
-        # Coarse mapping; tuned for UX, not compensation accuracy.
-        if exp_years >= 10:
-            fallback_level = "L6"
-            salary = "$260k-$450k"
-            tc = "$320k-$650k"
-        elif exp_years >= 5:
-            fallback_level = "L5"
-            salary = "$190k-$320k"
-            tc = "$240k-$480k"
-        else:
-            fallback_level = "L4"
-            salary = "$140k-$240k"
-            tc = "$180k-$330k"
-        valuation["level"] = fallback_level
-        valuation["salary_range"] = valuation.get("salary_range") or salary
-        valuation["total_compensation"] = valuation.get("total_compensation") or tc
-        valuation["reasoning"] = valuation.get("reasoning") or "Fallback estimate based on GitHub tenure + contribution signals."
-        level = fallback_level
-    else:
-        valuation["level"] = level
+    # Tags
+    tags: list[str] = []
+    tags_raw = results.get("user_tags")
+    if isinstance(tags_raw, list):
+        for t in tags_raw:
+            if isinstance(t, str) and t.strip():
+                tags.append(t.strip()[:60])
+    tags = tags[:8]
 
-    # Ensure Industry Ranking exists (frontend expects a 0..1 float).
+    repo_tags: list[str] = []
+    repo_tags_raw = results.get("repo_tags")
+    if isinstance(repo_tags_raw, list):
+        for t in repo_tags_raw:
+            if isinstance(t, str) and t.strip():
+                repo_tags.append(t.strip()[:60])
+    repo_tags = repo_tags[:8]
+
+    # Valuation (upstream schema): level + numeric salary_range + industry_ranking + growth_potential + reasoning.
+    valuation = results.get("valuation") if isinstance(results.get("valuation"), dict) else {}
+    level = _coerce_level(valuation.get("level"))
+    if level:
+        valuation["level"] = level
+    else:
+        valuation["level"] = _coerce_level((valuation or {}).get("level")) or "L4"
+
+    salary_range = valuation.get("salary_range")
+    if not (isinstance(salary_range, list) and len(salary_range) == 2):
+        # Hard fallback: keep UI contract stable even if LLM fails.
+        base_comp = {
+            "L3": 194_000,
+            "L4": 287_000,
+            "L5": 377_000,
+            "L6": 562_000,
+            "L7": 779_000,
+            "L8": 1_111_000,
+        }.get(str(valuation.get("level") or "L4"), 287_000)
+        valuation["salary_range"] = [int(base_comp * 0.9), int(base_comp * 1.1)]
+
     industry_ranking = _coerce_industry_ranking(valuation.get("industry_ranking"))
     if industry_ranking is None:
-        # Coarse fallback tuned for UX (not compensation accuracy).
-        if level in ("L6", "L7", "L8"):
+        if str(valuation.get("level") or "") in ("L6", "L7", "L8"):
             industry_ranking = 0.25
-        elif level == "L5":
+        elif str(valuation.get("level") or "") == "L5":
             industry_ranking = 0.35
         else:
             industry_ranking = 0.5
     valuation["industry_ranking"] = industry_ranking
 
-    # Ensure Growth Potential exists.
     growth = str(valuation.get("growth_potential") or "").strip()
     if not growth:
-        stars = 0
-        overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
-        try:
-            stars = int(overview.get("stars") or 0)
-        except Exception:
-            stars = 0
-        if stars >= 5000 or pr_total >= 1000 or level in ("L7", "L8"):
-            growth = "High"
-        elif stars >= 500 or pr_total >= 200 or level in ("L5", "L6"):
-            growth = "Medium"
-        else:
-            growth = "Low"
+        growth = "Medium"
     valuation["growth_potential"] = growth
+    if not str(valuation.get("reasoning") or "").strip():
+        valuation["reasoning"] = "Fallback estimate based on GitHub tenure + contribution signals."
 
-    role_model = payload.get("role_model") if isinstance(payload.get("role_model"), dict) else {}
-    if not role_model:
-        role_model = {
-            "name": login,
-            "github": login,
-            "similarity_score": 0.45,
-            "reason": "Fallback: insufficient signal for a strong external role model match.",
-        }
+    # Role model: prefer LLM output; fallback to a deterministic best-match from dev_pioneers_data (never self).
+    role_model = results.get("role_model") if isinstance(results.get("role_model"), dict) else {}
+    name = str(role_model.get("name") or "").strip()
+    gh = str(role_model.get("github") or "").strip()
+    if not name or not gh:
+        pioneers = getattr(analyzer, "dev_pioneers_data", None)
+        if isinstance(pioneers, list) and pioneers:
+            wanted = " ".join(tags).lower()
 
-    roast = str(payload.get("roast") or "").strip()
-    if not roast:
-        overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
-        try:
-            active_days = int(overview.get("active_days") or 0)
-        except Exception:
-            active_days = 0
-        if active_days <= 0:
-            roast = "Your contribution graph looks like it’s practicing minimalism—clean, quiet, and deeply committed to fewer commits."
+            def _score(p: Any) -> float:
+                if not isinstance(p, dict):
+                    return 0.0
+                area = str(p.get("area") or "").lower()
+                if not area or not wanted:
+                    return 0.0
+                wt = {w for w in re.split(r"[^a-z0-9]+", wanted) if w}
+                at = {w for w in re.split(r"[^a-z0-9]+", area) if w}
+                if not wt or not at:
+                    return 0.0
+                return float(len(wt & at)) / float(len(wt | at))
+
+            best = max(pioneers, key=_score)
+            best_score = _score(best)
+            role_model = {
+                "name": best.get("name") or "Role model",
+                "github": best.get("github") or "",
+                "similarity_score": float(role_model.get("similarity_score") or best_score or 0.0),
+                "reason": role_model.get("reason") or f"Matched by focus area overlap: {best.get('area') or 'N/A'}.",
+                "achievement": role_model.get("achievement") or best.get("famous_work") or "",
+            }
         else:
-            roast = "Your GitHub is so active it probably has its own coffee budget—shipping code like it’s a competitive sport."
+            role_model = {
+                "name": "Role model",
+                "github": "",
+                "similarity_score": 0.0,
+                "reason": "Role model unavailable (no pioneers dataset).",
+                "achievement": "",
+            }
 
-    mvp = payload.get("most_valuable_pull_request") if isinstance(payload.get("most_valuable_pull_request"), dict) else None
+    # Roast
+    roast = str(results.get("roast") or "").strip()
+    if not roast:
+        roast = "Your GitHub looks like a quiet powerhouse—shipping value without making too much noise."
+
+    # MVP PR
+    mvp = results.get("most_pr") if isinstance(results.get("most_pr"), dict) else None
     url = str(mvp.get("url") or "").strip() if isinstance(mvp, dict) else ""
     title = str(mvp.get("title") or "").strip() if isinstance(mvp, dict) else ""
     if not url or not title:
         mvp = fallback_pr
-
     if pr_total > 0 and not mvp:
         mvp = {
             "repository": "",
@@ -1264,21 +1227,23 @@ def run_github_enrich_bundle(
             "impact": "Unavailable",
         }
 
-    tags_raw = payload.get("feature_project_tags")
-    tags: list[str] = []
-    if isinstance(tags_raw, list):
-        for t in tags_raw:
-            if isinstance(t, str) and t.strip():
-                tags.append(t.strip()[:50])
-    tags = tags[:8]
+    # Merge tags into the report-shaped output.
+    out_user: Any = dict(user or {}) if isinstance(user, dict) else user
+    if isinstance(out_user, dict) and tags:
+        out_user["tags"] = tags
 
-    feature_out: Any = base.get("feature_project")
-    if isinstance(feature_out, dict):
-        feature_out = dict(feature_out)
-        if tags:
-            feature_out["tags"] = tags
+    feature_out: Any = dict(feature_project or {}) if isinstance(feature_project, dict) else feature_project
+    if isinstance(feature_out, dict) and repo_tags:
+        feature_out["tags"] = repo_tags
+
+    llm_status = "ok"
+    if not isinstance(role_model, dict) or not str(role_model.get("name") or "").strip():
+        llm_status = "partial"
+    if not isinstance(valuation, dict) or not str(valuation.get("level") or "").strip():
+        llm_status = "partial"
 
     out: Dict[str, Any] = {
+        "user": out_user,
         "feature_project": feature_out,
         "top_projects": top_projects,
         "most_valuable_pull_request": mvp,

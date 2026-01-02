@@ -1610,54 +1610,37 @@ class PipelineExecutor:
                         raise ValueError("missing resource.scholar.page0")
                     report = dict(base_art.payload or {})
 
-                    researcher = report.get("researcher") if isinstance(report.get("researcher"), dict) else {}
-                    pub_stats = report.get("publication_stats") if isinstance(report.get("publication_stats"), dict) else {}
-                    coauthor_stats = report.get("coauthor_stats") if isinstance(report.get("coauthor_stats"), dict) else {}
+                    # Attach level info (used by estimatedSalary/researcherCharacter) when available.
+                    level_art = self._artifact_store.get_artifact(job.id, "resource.scholar.level")
+                    if level_art is not None and isinstance(level_art.payload, dict) and level_art.payload:
+                        report["level_info"] = dict(level_art.payload or {})
 
-                    def _int(value: Any) -> Optional[int]:
-                        try:
-                            if value is None:
-                                return None
-                            if isinstance(value, bool):
-                                return None
-                            if isinstance(value, (int, float)):
-                                return int(value)
-                            s = str(value).strip().lower()
-                            if not s:
-                                return None
-                            mult = 1
-                            if s.endswith("k"):
-                                mult = 1000
-                                s = s[:-1]
-                            s = s.replace(",", "")
-                            return int(float(s) * mult)
-                        except Exception:
-                            return None
+                    if ct == "criticalReview":
+                        from server.prompts.researcher_evaluator import generate_critical_evaluation
 
-                    def _year_map(raw: Any) -> Dict[str, int]:
-                        if not isinstance(raw, dict):
-                            return {}
-                        out: Dict[str, int] = {}
-                        for k, v in raw.items():
-                            ks = str(k).strip()
-                            if not ks:
-                                continue
-                            out[ks] = int(_int(v) or 0)
-                        return out
+                        progress("ai_critical_review", "Generating critical review...", None)
+                        text = generate_critical_evaluation(report) or ""
+                        return {"blockTitle": "Roast", "evaluation": str(text).strip() or None}
+
+                    from server.transform_profile import transform_data
+
+                    transformed = transform_data(report) if isinstance(report, dict) else {}
+                    if not isinstance(transformed, dict):
+                        transformed = {}
+                    profile = transformed.get("researcherProfile") if isinstance(transformed.get("researcherProfile"), dict) else {}
+                    researcher_info = profile.get("researcherInfo") if isinstance(profile.get("researcherInfo"), dict) else {}
+                    blocks = profile.get("dataBlocks") if isinstance(profile.get("dataBlocks"), dict) else {}
 
                     def _parse_usd(value: Any) -> Optional[int]:
                         if value is None:
                             return None
                         if isinstance(value, (int, float)) and not isinstance(value, bool):
                             return int(value)
-                        if not isinstance(value, str):
-                            return _int(value)
-                        s = value.strip().lower()
+                        s = str(value).strip().lower()
                         if not s:
                             return None
                         s = s.replace(",", "")
                         s = s.replace("$", "").replace("usd", "").strip()
-                        # Normalize common range separators.
                         s = s.replace("–", "-").replace("—", "-").replace("~", "-").replace("〜", "-").replace("～", "-")
                         s = re.sub(r"\\s+to\\s+", "-", s)
                         # Range: "200k-300k", "200000-300000"
@@ -1674,7 +1657,6 @@ class PipelineExecutor:
                                 return int(float(s[:-1]) * 1000)
                             except Exception:
                                 return None
-                        # Extract first number
                         m = re.search(r"(\\d+(?:\\.\\d+)?)", s)
                         if not m:
                             return None
@@ -1683,191 +1665,31 @@ class PipelineExecutor:
                         except Exception:
                             return None
 
-                    def _paper_year(raw: Any) -> Optional[int]:
-                        y = _int(raw)
-                        if y is None:
-                            return None
-                        if y < 1900 or y > 2100:
-                            return None
-                        return y
-
                     if ct == "researcherInfo":
-                        out: Dict[str, Any] = {
-                            "name": researcher.get("name"),
-                            "abbreviatedName": researcher.get("abbreviated_name"),
-                            "affiliation": researcher.get("affiliation"),
-                            "email": researcher.get("email"),
-                            "researchFields": researcher.get("research_fields") if isinstance(researcher.get("research_fields"), list) else [],
-                            "totalCitations": _int(researcher.get("total_citations")),
-                            "citations5y": _int(researcher.get("citations_5y")),
-                            "hIndex": _int(researcher.get("h_index")),
-                            "hIndex5y": _int(researcher.get("h_index_5y")),
-                            "yearlyCitations": _year_map(researcher.get("yearly_citations")),
-                            "scholarId": researcher.get("scholar_id"),
-                            "avatar": researcher.get("avatar"),
-                            "description": researcher.get("description"),
-                        }
-                        return out
+                        return researcher_info
 
-                    if ct == "publicationStats":
-                        out = {
-                            "blockTitle": "Papers",
-                            "totalPapers": _int(pub_stats.get("total_papers")),
-                            "totalCitations": _int(researcher.get("total_citations")),
-                            "hIndex": _int(researcher.get("h_index")),
-                            "yearlyCitations": _year_map(researcher.get("yearly_citations")),
-                            "yearlyPapers": _year_map(pub_stats.get("year_distribution")),
-                        }
-                        return out
-
-                    if ct == "publicationInsight":
-                        out = {
-                            "blockTitle": "Insight",
-                            "totalPapers": _int(pub_stats.get("total_papers")),
-                            "topTierPapers": _int(pub_stats.get("top_tier_papers")),
-                            "firstAuthorPapers": _int(pub_stats.get("first_author_papers")),
-                            "firstAuthorCitations": _int(pub_stats.get("first_author_citations")),
-                            "totalCoauthors": _int(coauthor_stats.get("total_coauthors")),
-                            "lastAuthorPapers": _int(pub_stats.get("last_author_papers")),
-                            "conferenceDistribution": pub_stats.get("conference_distribution") if isinstance(pub_stats.get("conference_distribution"), dict) else {},
-                        }
-                        return out
-
-                    if ct == "roleModel":
-                        name = str(researcher.get("name") or "").strip() or None
-                        affiliation = str(researcher.get("affiliation") or "").strip() or None
-                        avatar = researcher.get("avatar")
-
-                        most_cited = pub_stats.get("most_cited_paper") if isinstance(pub_stats.get("most_cited_paper"), dict) else {}
-                        achievement = None
-                        try:
-                            title = str(most_cited.get("title") or "").strip()
-                            year = str(most_cited.get("year") or "").strip()
-                            if title:
-                                achievement = f"{title}{(' (' + year + ')') if year else ''}"
-                        except Exception:
-                            achievement = None
-
-                        out = {
-                            "blockTitle": "Role Model",
-                            "found": bool(name),
-                            "name": name,
-                            "institution": affiliation,
-                            "position": "Established Researcher" if name else None,
-                            "photoUrl": avatar,
-                            "achievement": achievement,
-                            "similarityReason": (
-                                "Congrats! You are already your own hero! Your unique research path and contributions have established you as a notable figure in your field."
-                                if name
-                                else None
-                            ),
-                        }
-                        return out
-
-                    if ct == "closestCollaborator":
-                        most = coauthor_stats.get("most_frequent_collaborator") if isinstance(coauthor_stats.get("most_frequent_collaborator"), dict) else {}
-                        # Prefer enriched collaborator details when available (may include affiliation/photo/etc).
-                        detailed = report.get("most_frequent_collaborator") if isinstance(report.get("most_frequent_collaborator"), dict) else {}
-                        best = detailed.get("best_paper") if isinstance(detailed.get("best_paper"), dict) else (most.get("best_paper") if isinstance(most.get("best_paper"), dict) else {})
-                        out = {
-                            "blockTitle": "Closest Collaborator",
-                            "fullName": detailed.get("full_name") or most.get("name"),
-                            "affiliation": detailed.get("affiliation"),
-                            "researchInterests": detailed.get("research_interests") if isinstance(detailed.get("research_interests"), list) else [],
-                            "scholarId": detailed.get("scholar_id"),
-                            "coauthoredPapers": _int(detailed.get("coauthored_papers")) or _int(most.get("coauthored_papers")),
-                            "avatar": detailed.get("photo") or detailed.get("avatar"),
-                            "bestCoauthoredPaper": {
-                                "title": best.get("title"),
-                                "year": _paper_year(best.get("year")),
-                                "venue": best.get("venue"),
-                                "fullVenue": best.get("original_venue") or best.get("venue"),
-                                "citations": _int(best.get("citations")),
-                            },
-                            "connectionAnalysis": detailed.get("description"),
-                        }
-                        return out
-
-                    if ct in ("estimatedSalary", "researcherCharacter"):
-                        level_art = self._artifact_store.get_artifact(job.id, "resource.scholar.level")
-                        if level_art is None or not isinstance(level_art.payload, dict):
-                            raise ValueError("missing resource.scholar.level")
-                        level = dict(level_art.payload or {})
-
-                        if ct == "estimatedSalary":
-                            earnings_usd = _parse_usd(level.get("earnings"))
-                            # Robust fallback: some level providers return qualitative/empty `earnings` strings.
-                            # The frontend needs a numeric earningsPerYearUSD to render the card consistently.
-                            if earnings_usd is None or int(earnings_usd or 0) <= 0 or int(earnings_usd or 0) < 10_000:
-                                lvl = str(level.get("level_us") or "").strip().upper()
-                                by_level = {
-                                    "L3": 150_000,
-                                    "L4": 220_000,
-                                    "L5": 310_000,
-                                    "L6": 440_000,
-                                    "L7": 640_000,
-                                    "L8": 905_000,
-                                }
-                                earnings_usd = int(by_level.get(lvl) or 300_000)
-                            out = {
-                                "blockTitle": "Estimated Salary",
-                                "earningsPerYearUSD": int(earnings_usd) if earnings_usd is not None else None,
-                                "levelEquivalency": {"us": level.get("level_us"), "cn": level.get("level_cn")},
-                                "reasoning": level.get("justification"),
+                    payload = blocks.get(ct) if isinstance(blocks.get(ct), dict) else {}
+                    if ct == "estimatedSalary":
+                        out = dict(payload or {})
+                        earnings_usd = _parse_usd(out.get("earningsPerYearUSD"))
+                        if earnings_usd is None or int(earnings_usd or 0) <= 0 or int(earnings_usd or 0) < 10_000:
+                            lvl = ""
+                            level_eq = out.get("levelEquivalency") if isinstance(out.get("levelEquivalency"), dict) else {}
+                            if isinstance(level_eq, dict):
+                                lvl = str(level_eq.get("us") or "").strip().upper()
+                            by_level = {
+                                "L3": 150_000,
+                                "L4": 220_000,
+                                "L5": 310_000,
+                                "L6": 440_000,
+                                "L7": 640_000,
+                                "L8": 905_000,
                             }
-                            return out
-
-                        bars = level.get("evaluation_bars") if isinstance(level.get("evaluation_bars"), dict) else {}
-                        depth = bars.get("depth_vs_breadth") if isinstance(bars.get("depth_vs_breadth"), dict) else {}
-                        theory = bars.get("theory_vs_practice") if isinstance(bars.get("theory_vs_practice"), dict) else {}
-                        team = bars.get("individual_vs_team") if isinstance(bars.get("individual_vs_team"), dict) else {}
-                        out = {
-                            "blockTitle": "Researcher Character",
-                            "depthVsBreadth": _int(depth.get("score")),
-                            "theoryVsPractice": _int(theory.get("score")),
-                            "soloVsTeamwork": _int(team.get("score")),
-                            "justification": level.get("justification"),
-                        }
+                            earnings_usd = int(by_level.get(lvl) or 300_000)
+                        out["earningsPerYearUSD"] = int(earnings_usd) if earnings_usd is not None else None
                         return out
 
-                    if ct == "paperOfYear":
-                        paper = pub_stats.get("paper_of_year") if isinstance(pub_stats.get("paper_of_year"), dict) else {}
-                        out = {
-                            "blockTitle": "Paper of Year",
-                            "title": paper.get("title"),
-                            "year": _paper_year(paper.get("year")),
-                            "venue": paper.get("venue"),
-                            "citations": _int(paper.get("citations")),
-                            "authorPosition": _int(paper.get("author_position")),
-                            "summary": paper.get("summary"),
-                        }
-                        return out
-
-                    if ct == "representativePaper":
-                        paper = pub_stats.get("most_cited_paper") if isinstance(pub_stats.get("most_cited_paper"), dict) else {}
-                        out = {
-                            "blockTitle": "Representative Paper",
-                            "title": paper.get("title"),
-                            "year": _paper_year(paper.get("year")),
-                            "venue": paper.get("venue"),
-                            "fullVenue": paper.get("original_venue") or paper.get("venue"),
-                            "citations": _int(paper.get("citations")),
-                            "authorPosition": _int(paper.get("author_position")),
-                            "paper_news": pub_stats.get("paper_news") if pub_stats.get("paper_news") is not None else report.get("paper_news"),
-                        }
-                        return out
-
-                    if ct == "criticalReview":
-                        from server.prompts.researcher_evaluator import generate_critical_evaluation
-
-                        progress("ai_critical_review", "Generating critical review...", None)
-                        text = generate_critical_evaluation(report) or ""
-                        return {"blockTitle": "Roast", "evaluation": str(text).strip() or None}
-
-                    artifact = self._artifact_store.get_artifact(job.id, "full_report")
-                    if artifact is not None and isinstance(artifact.payload, dict):
-                        return extract_card_payload(source, artifact.payload, ct)
-                    raise ValueError(f"unsupported scholar card: {ct}")
+                    return payload
 
                 if source == "linkedin":
                     raw_art = self._artifact_store.get_artifact(job.id, "resource.linkedin.raw_profile")
