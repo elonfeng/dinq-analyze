@@ -9,7 +9,7 @@
 - **JobStore**：job/cad 生命周期
 - **EventStore**：SSE 事件持久化与回放
 - **ArtifactStore**：full_report 等产物存储
-- **Scheduler**：并行执行 ready cards（可在 API 进程内运行，也可在独立 runner 进程运行；由 `DINQ_EXECUTOR_MODE` 控制）
+- **Scheduler**：并行执行 ready cards（API 进程内运行）
 
 ## server/llm
 - **Gateway**：统一 OpenRouter、JSON 修复、缓存

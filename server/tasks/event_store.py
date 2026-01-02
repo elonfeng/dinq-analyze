@@ -88,12 +88,7 @@ class EventStore:
         if mode in ("1", "true", "on", "enable", "enabled", "yes"):
             return True
         # auto
-        try:
-            from server.config.executor_mode import get_executor_mode
-
-            return get_executor_mode() == "inprocess"
-        except Exception:
-            return False
+        return True
 
     def _publish_to_bus_best_effort(
         self,

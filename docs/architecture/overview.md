@@ -19,9 +19,7 @@
 - **同步模式**：/api/analyze `mode=sync`
 - **异步模式**：/api/analyze `mode=async`（默认，只创建 job）
 - **流式回放**：/api/analyze/jobs/<id>/stream（SSE，支持断线续传）
-- **执行拓扑（关键）**：由 `DINQ_EXECUTOR_MODE` 控制
-  - `inprocess`：API 进程内执行卡片（本地/开发默认）
-  - `external`：API-only（只提供 create/status/stream），由独立 runner 进程从 DB 领取卡片执行（生产推荐）
+- **执行拓扑**：单机本地优先（API 进程内启动 scheduler 执行 cards）
 
 ## 存储
 - **Job + Event + Artifact**：数据库表

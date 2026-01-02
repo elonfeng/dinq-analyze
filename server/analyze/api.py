@@ -35,7 +35,6 @@ from server.analyze.pipeline import create_job_cards, PipelineExecutor
 from server.analyze.card_specs import get_stream_spec
 from server.analyze.quality_gate import GateContext, validate_card_output
 from server.analyze import rules
-from server.config.executor_mode import api_should_start_scheduler, scheduler_enabled, get_executor_mode
 from server.utils.json_clean import prune_empty
 from server.utils.sqlite_cache import get_sqlite_cache
 from server.utils.stream_protocol import create_event, format_stream_message
@@ -259,8 +258,7 @@ def _enqueue_final_result_refresh(
             return
 
         try:
-            if scheduler_enabled():
-                init_scheduler()
+            init_scheduler()
         except Exception:
             pass
 
@@ -376,8 +374,10 @@ def _create_job_bundle(
                 stale=bool(cache_hit_stale),
             )
 
-        if api_should_start_scheduler():
+        try:
             init_scheduler()
+        except Exception:
+            pass
         return True
     except Exception as exc:  # noqa: BLE001
         logger.exception("create job bundle failed (job_id=%s): %s", job_id, exc)
@@ -502,8 +502,6 @@ def _try_get_l1_cached_final_result(
 
 def init_scheduler(max_workers: Optional[int] = None) -> None:
     global _scheduler
-    if not scheduler_enabled():
-        return
     if _scheduler is None:
         if max_workers is None:
             max_workers = _read_int_env("DINQ_ANALYZE_SCHEDULER_MAX_WORKERS", 4)
@@ -568,8 +566,7 @@ def stream_job_events(job_id: str, after_seq: int = 0):
 
 def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] = None) -> Dict[str, Any]:
     def _sync_timeout_seconds() -> int:
-        # NOTE: In external runner topology, "sync" means "block until the runner finishes"
-        # so this timeout needs to be reasonably large.
+        # "sync" mode is for debugging; keep a sensible upper bound.
         return max(10, min(_read_int_env("DINQ_ANALYZE_SYNC_TIMEOUT_SECONDS", 600), 7200))
 
     def _collect_cards_for_response() -> tuple[str, Optional[str], Dict[str, Any], list[Dict[str, Any]]]:
@@ -594,55 +591,6 @@ def run_sync_job(job_id: str, source: str, requested_cards: Optional[list[str]] 
             if st in ("failed", "timeout"):
                 errs.append({"card": ct, "status": st})
         return status, subject_key, cards_out, errs
-
-    # In external topology, the API process must NOT execute cards (runner does that).
-    # "sync" here means: wait for terminal, then return a snapshot of all cards.
-    if get_executor_mode() == "external":
-        try:
-            _job_store.release_ready_cards(job_id)
-        except Exception:
-            pass
-
-        terminal = {"completed", "partial", "failed", "cancelled"}
-        deadline = time.monotonic() + float(_sync_timeout_seconds())
-        while time.monotonic() < deadline:
-            job = _job_store.get_job(job_id)
-            if job is None:
-                return {
-                    "success": False,
-                    "source": source,
-                    "job_id": job_id,
-                    "status": "not_found",
-                    "cards": {},
-                    "errors": [{"error": "job not found"}],
-                }, 404
-            if str(getattr(job, "status", "") or "") in terminal:
-                break
-            time.sleep(0.15)
-
-        status, subject_key, cards_out, errs = _collect_cards_for_response()
-        if status not in terminal:
-            # Timed out waiting: return partial snapshot + let the client continue via SSE.
-            return {
-                "success": True,
-                "source": source,
-                "job_id": job_id,
-                "subject_key": subject_key,
-                "status": status or "running",
-                "cards": cards_out,
-                "errors": errs,
-                "timeout": True,
-                "stream_url": f"/api/analyze/jobs/{job_id}/stream?after=0",
-            }, 200
-        return {
-            "success": True,
-            "source": source,
-            "job_id": job_id,
-            "subject_key": subject_key,
-            "status": status,
-            "cards": cards_out,
-            "errors": errs,
-        }, 200
 
     results: Dict[str, Any] = {}
     errors: list[Dict[str, Any]] = []
@@ -1331,8 +1279,10 @@ def analyze():
             }
         )
 
-    if api_should_start_scheduler():
+    try:
         init_scheduler()
+    except Exception:
+        pass
     # Backward compat: idempotency replays may point at older jobs whose initial cards were created as pending.
     if not created:
         try:
@@ -1452,8 +1402,11 @@ def stream_job(job_id: str):
             return
 
         # Ensure scheduler is running for non-terminal jobs (service restarts, etc.).
-        if api_should_start_scheduler() and getattr(rec, "status", "") not in ("completed", "partial", "failed", "cancelled"):
-            init_scheduler()
+        if getattr(rec, "status", "") not in ("completed", "partial", "failed", "cancelled"):
+            try:
+                init_scheduler()
+            except Exception:
+                pass
         yield from _event_store.stream_events(job_id=job_id, after_seq=after_seq, stop_when_done=True, job_store=_job_store)
 
     return Response(

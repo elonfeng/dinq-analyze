@@ -5,6 +5,7 @@ import logging
 import json
 import os
 import re
+from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Type, TypeVar, Union, Generic
 from contextlib import contextmanager
@@ -21,7 +22,8 @@ from src.models.db import Base, Scholar
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('db_utils')
 
-_DEFAULT_DB_URL = "sqlite:///./dinq.db"
+_DEFAULT_JOBS_DB_URL = "sqlite:///./dinq.db"
+_DEFAULT_CACHE_DB_URL = "sqlite:///./.local/db/dinq_cache.sqlite3"
 
 
 def _get_jobs_db_url() -> str:
@@ -31,16 +33,22 @@ def _get_jobs_db_url() -> str:
     优先级：
       1) DINQ_JOBS_DB_URL
       2) DINQ_DB_URL
-      3) DATABASE_URL / DB_URL
       3) 代码内默认（仅本地 SQLite；不包含任何线上/密钥信息）
+
+    注意：主链路 DB 只允许 SQLite（单机本地优先）。远程 Postgres 仅用于 backup/outbox。
     """
-    return (
+
+    url = (
         os.getenv("DINQ_JOBS_DB_URL")
         or os.getenv("DINQ_DB_URL")
-        or os.getenv("DATABASE_URL")
-        or os.getenv("DB_URL")
-        or _DEFAULT_DB_URL
+        or _DEFAULT_JOBS_DB_URL
     )
+    if not str(url or "").strip().lower().startswith("sqlite"):
+        raise ValueError(
+            "Primary jobs DB must be SQLite. "
+            "Use DINQ_JOBS_DB_URL or DINQ_DB_URL with a sqlite:/// URL, and configure Postgres via DINQ_BACKUP_DB_URL instead."
+        )
+    return str(url)
 
 
 def _get_cache_db_url() -> str:
@@ -50,19 +58,22 @@ def _get_cache_db_url() -> str:
     优先级：
       1) DINQ_CACHE_DB_URL
       2) DINQ_DB_URL
-      3) DATABASE_URL / DB_URL
-      4) 默认 SQLite（仅本地）
+      3) 默认 SQLite（仅本地）
 
-    说明：当未显式配置 cache DB 时，默认与 jobs DB 共用同一个 DB URL（向后兼容）。
+    说明：本项目默认将 cache DB 放在单独的 SQLite 文件中，便于做基于磁盘的缓存淘汰。
     """
 
-    return (
+    url = (
         os.getenv("DINQ_CACHE_DB_URL")
         or os.getenv("DINQ_DB_URL")
-        or os.getenv("DATABASE_URL")
-        or os.getenv("DB_URL")
-        or _DEFAULT_DB_URL
+        or _DEFAULT_CACHE_DB_URL
     )
+    if not str(url or "").strip().lower().startswith("sqlite"):
+        raise ValueError(
+            "Primary cache DB must be SQLite. "
+            "Use DINQ_CACHE_DB_URL or DINQ_DB_URL with a sqlite:/// URL, and configure Postgres via DINQ_BACKUP_DB_URL instead."
+        )
+    return str(url)
 
 
 def _get_backup_db_url() -> str:
@@ -76,7 +87,16 @@ def _get_backup_db_url() -> str:
       DINQ_BACKUP_DB_URL
     """
 
-    return str(os.getenv("DINQ_BACKUP_DB_URL") or "").strip()
+    raw = str(os.getenv("DINQ_BACKUP_DB_URL") or "").strip()
+    if raw:
+        return raw
+
+    # Backward-compatible fallback: if a Postgres DATABASE_URL is present, treat it as backup.
+    # IMPORTANT: jobs/cache are still SQLite-only.
+    fallback = str(os.getenv("DATABASE_URL") or os.getenv("DB_URL") or "").strip()
+    if fallback.lower().startswith("postgres"):
+        return fallback
+    return ""
 
 
 DB_URL = _get_jobs_db_url()
@@ -127,6 +147,15 @@ def _create_engine(db_url: str, *, role: str):
             )
             _install_sqlite_pragmas(eng)
             return eng
+
+        # Ensure parent directory exists for file-backed sqlite DBs.
+        try:
+            if db_url.startswith("sqlite:///"):
+                sqlite_path = db_url[len("sqlite:///") :]
+                if sqlite_path and sqlite_path != ":memory:":
+                    Path(os.path.abspath(sqlite_path)).parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         eng = create_engine(db_url, echo=echo, connect_args=connect_args)
         _install_sqlite_pragmas(eng)
         return eng

@@ -24,24 +24,23 @@
 |---|---|---|
 | `DINQ_ENV` | `development/test/production` | `development` |
 | `FLASK_ENV` | Flask 环境（部署时建议与 `DINQ_ENV` 一致） | `development` |
-| `DINQ_EXECUTOR_MODE` | 执行拓扑：`inprocess`（API 内执行）/ `external`（API-only，需 runner）/ `runner`（runner 进程） | 默认：sqlite 强制 `inprocess`；其余生产默认 `external`；非生产默认 `inprocess` |
 
 ### 1.2 数据库（分析任务 job/events 持久化）
 
-支持“两库”拓扑（推荐）：
-- **jobs DB（运行态）**：`jobs/job_cards/job_events/artifacts` 等（建议本机 SQLite，SSE 回放也从这里读取）
-- **cache DB（唯一事实源缓存）**：`analysis_subjects/analysis_runs/analysis_artifact_cache(final_result)`（建议远程 Postgres）
-
-至少需要配置 jobs DB；cache DB 未配置时会回退到同一个 DB（向后兼容）。
+本项目采用“本地 SQLite 主存储 + 远程 Postgres 备份（可选）”的简化模型：
+- **jobs DB（主）**：本机 SQLite（`jobs/job_cards/job_events/artifacts`）
+- **cache DB（主）**：本机 SQLite（`analysis_*` 缓存表；默认单独文件，便于做磁盘淘汰）
+- **backup DB（可选）**：远程 Postgres（仅异步 outbox 备份/冷启动读回；不在在线请求关键路径）
 
 | 环境变量 | 说明 |
 |---|---|
-| `DINQ_JOBS_DB_URL` | jobs DB URL（推荐本机 SQLite，例如 `sqlite:////data/dinq_jobs.sqlite3`） |
-| `DINQ_CACHE_DB_URL` | cache DB URL（推荐远程 Postgres；不设置则回退到 `DINQ_DB_URL`） |
-| `DINQ_DB_URL` | 旧版统一 DB URL（向后兼容；也作为 cache DB 的默认 fallback） |
-| `DATABASE_URL` | Postgres URL（兼容） |
+| `DINQ_JOBS_DB_URL` | jobs DB URL（仅支持 SQLite，例如 `sqlite:////data/dinq_jobs.sqlite3`） |
+| `DINQ_CACHE_DB_URL` | cache DB URL（仅支持 SQLite，例如 `sqlite:////data/dinq_cache.sqlite3`） |
+| `DINQ_DB_URL` | 统一本地 SQLite URL（向后兼容；同时作为 jobs/cache 的覆盖值） |
+| `DINQ_BACKUP_DB_URL` | backup DB URL（可选；Postgres，用于 outbox 备份/读回） |
+| `DATABASE_URL` | 若未设置 `DINQ_BACKUP_DB_URL`，并且 `DATABASE_URL` 是 Postgres，则会被视为 backup DB（兼容旧部署） |
 
-连接池（多 gunicorn workers 时强烈建议显式配置，避免 `workers × pool_size` 打满数据库）：
+连接池（仅对 Postgres backup 生效；本地主库 SQLite 不使用连接池）：
 
 | 环境变量 | 说明 | 默认 |
 |---|---|---|

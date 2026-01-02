@@ -1,11 +1,9 @@
-# DINQ Production Deployment (Analysis Service + Runner)
+# DINQ Production Deployment (Analysis Service)
 
-本仓库的“新分析服务（dinq-dev）”推荐使用 **systemd + gunicorn + 独立 runner** 的部署形态：
-
-- **API 进程**：只做 `POST create job / GET snapshot / SSE replay`
-- **Runner 进程**：从 DB claim cards 执行（爬虫/LLM），写入 `job_events`（SSE 可回放/可续传）
-
-> 旧的 `dinq_service.py` / `dinq.sh` 属于历史管理方式，不建议用于 dinq-dev（dev 分支）新架构。
+本仓库的分析服务采用 **单机本地优先** 的部署形态：
+- API 进程内启动 scheduler 并执行 cards（爬虫/LLM）
+- 主存储为本机 SQLite（jobs + analysis caches）
+- 远程 Postgres（可选）仅用于 outbox 异步备份/冷启动读回（不在在线请求关键路径）
 
 ---
 
@@ -13,8 +11,8 @@
 
 - Ubuntu + `systemd`
 - Python 3 + `venv`
-- DB：Postgres（推荐）
-- `psql`（用于运行 SQL migrations）
+- DB：本机 SQLite（必需）；Postgres（可选，作为备份）
+- `psql`（可选；仅当你要初始化/维护 Postgres 备份库表时需要）
 - 配置文件：`.env.production`（推荐将敏感项放 `.env.production.local`）
 
 ---
@@ -29,16 +27,13 @@ cd /root/dinq-dev
 ./deploy.sh migrate
 ./deploy.sh install
 ./deploy.sh start
-./deploy.sh start-runner
 ```
 
 常用运维：
 
 ```bash
 ./deploy.sh status
-./deploy.sh status-runner
 ./deploy.sh logs
-./deploy.sh logs-runner
 ```
 
 一键更新（拉代码 + 装依赖 + migrate + 重启）：
@@ -51,11 +46,11 @@ sudo ./deploy.sh update
 
 ## 3) 关键配置要点
 
-- `.env.production`：务必设置 `DINQ_DB_URL` / `DATABASE_URL` + 各类 API keys（不要提交到仓库）
+- `.env.production`：务必设置各类 API keys（不要提交到仓库）
+- 主库（SQLite）：可选覆盖 `DINQ_JOBS_DB_URL` / `DINQ_CACHE_DB_URL`（默认会使用本机 SQLite 文件）
+- 备份库（Postgres，可选）：设置 `DINQ_BACKUP_DB_URL`（或沿用 `DATABASE_URL` 作为兼容 fallback）
 - systemd 环境：部署脚本默认写入
   - `DINQ_ENV=production` / `FLASK_ENV=production`
-  - API：`DINQ_EXECUTOR_MODE=external`
-  - Runner：`DINQ_EXECUTOR_MODE=runner`
 - SSE 连接数：建议 `LimitNOFILE=65535`
 - gunicorn：建议 `--worker-class gthread`，根据机器内存调整 `--workers/--threads`
 

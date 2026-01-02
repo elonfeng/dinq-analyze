@@ -21,21 +21,14 @@
 - **Artifact**：大对象/中间结果（`artifacts` 表），例如 `resource.github.data`、`resource.linkedin.raw_profile`。
 - **Event**：SSE 可回放事件流（`job_events` 表）：`card.progress/card.append/card.delta/card.completed/...`
 
-### 0.2 执行形态（inprocess / external）
-- `DINQ_EXECUTOR_MODE=inprocess`：API 进程内启动 scheduler 执行 cards。
-- `DINQ_EXECUTOR_MODE=external`：独立 runner 从 DB claim cards 执行（生产推荐）。
+### 0.2 执行形态（单机本地优先）
+- API 进程内启动 scheduler 执行 cards（不再区分 external runner 拓扑）。
+- 主存储为本机 SQLite（jobs/events + analysis caches）。
+- 远程 Postgres（可选）仅用于 outbox 异步备份/冷启动读回，不在在线请求关键路径。
 
-### 0.2.1 ⚠️ DB RTT 会直接决定“首屏速度”
-本系统的 SSE 是 **DB 事件溯源（job_events）+ 快照（job_cards.output）**：几乎每一步进度都要写 DB。
-因此如果 **API/runner 与 DB 跨地域**（例如 runner 在美国、DB 在新加坡），会出现：
-- `POST /api/analyze` 本身就要 3–5s（创建 job + 多张 card 的写入）
-- 资源卡/LLM 卡虽然“外部请求本身不慢”，但因为大量 `append_event()` 写 DB 往返，卡耗时会被放大到几十秒甚至分钟
-- SSE `ttfb` 与事件到达也会明显变慢（轮询 fetch_events 同样需要跨地域 RTT）
-
-要达成“强保证 10 秒首屏”，推荐：
-- 把 DB 部署到与 runner 同地域/同机房（或同机）
-- 并使用连接池/pgbouncer + 降低事件写入频率/批量写入（本仓库已对 event/job 写入做过降往返优化）
-- 对“热打开”路径，优先依赖 final_result 两级缓存（本机 SQLite L1 + 远端 DB）直接返回卡片结果
+### 0.2.1 “首屏速度”的真实决定因素（现在主要是外部 API）
+SSE 仍然是 **DB 事件溯源（job_events）+ 快照（job_cards.output）**，但由于主库是本机 SQLite，DB RTT 基本不再是瓶颈。
+首屏/长尾主要由外部依赖决定：GitHub API、Crawlbase/抓取、Apify、LLM 等。
 
 ### 0.3 Scheduler 关键机制（影响“完整性/速度”）
 1) **并发组（concurrency_group）**  
@@ -140,7 +133,7 @@ flowchart TD
 | `resource.github.data` | GraphQL：GithubBundleQuery | `1`（可能因 query 内分页而多次请求） | 拉取 user + PR candidates + contributionCalendar + top repos（用于 activity/code_contribution 等） |
 
 备注：  
-- `resource.github.data` 的 bundle 目标是“减少 fan-out”，但实际请求数仍取决于 Query.process 的分页策略与返回体大小；并且该卡的 artifact 体积较大，会放大跨地域 DB 读写成本（建议同地域 DB/runner）。
+- `resource.github.data` 的 bundle 目标是“减少 fan-out”，但实际请求数仍取决于 Query.process 的分页策略与返回体大小；并且该卡的 artifact 体积较大，会放大 DB 读写成本（建议本机 SQLite 主库 + 异步备份）。
 
 ### 2.3 GitHub LLM 依赖图 & 调用次数
 
