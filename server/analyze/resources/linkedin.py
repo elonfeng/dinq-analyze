@@ -669,6 +669,48 @@ def fetch_linkedin_raw_profile(
             "raw_profile": raw_profile_store,
         },
     }
+    # Frontend-only sections (non-LLM, fast defaults).
+    # These fields exist in the historical LinkedIn profile schema and should never be empty.
+    try:
+        from server.linkedin_analyzer.colleagues_view_service import create_default_colleagues_view
+        from server.linkedin_analyzer.life_well_being_service import create_default_life_well_being
+
+        base_for_defaults = raw_profile_store if raw_profile_store else raw_profile
+        report["profile_data"]["colleagues_view"] = create_default_colleagues_view(base_for_defaults, resolved_name)
+        report["profile_data"]["life_well_being"] = create_default_life_well_being(base_for_defaults, resolved_name)
+    except Exception:
+        report["profile_data"]["colleagues_view"] = {
+            "highlights": ["Professional experience", "Career progression", "Growth mindset"],
+            "areas_for_improvement": [
+                "Expand cross-functional impact",
+                "Strengthen strategic ownership",
+                "Deepen domain expertise",
+            ],
+        }
+        report["profile_data"]["life_well_being"] = {
+            "life_suggestion": {
+                "advice": (
+                    "Prioritize sustainable routines and clear boundaries to avoid burnout while maintaining momentum "
+                    "in your career."
+                ),
+                "actions": [
+                    {"emoji": "⚖️", "phrase": "Set Boundaries"},
+                    {"emoji": "📚", "phrase": "Keep Learning"},
+                    {"emoji": "❤️", "phrase": "Nurture Relationships"},
+                ],
+            },
+            "health": {
+                "advice": (
+                    "Maintain consistent sleep, regular movement, and stress-management habits to stay resilient "
+                    "under work pressure."
+                ),
+                "actions": [
+                    {"emoji": "😴", "phrase": "Sleep Schedule"},
+                    {"emoji": "🏃", "phrase": "Regular Exercise"},
+                    {"emoji": "🧘", "phrase": "Stress Management"},
+                ],
+            },
+        }
     return report
 
 
@@ -915,21 +957,29 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
             create_self_role_model,
         )
 
-        celebrity = fallback_celebrity_check(raw_profile, person_name)
-        if celebrity:
-            role_model = create_enhanced_self_role_model(raw_profile, person_name, "Heuristic celebrity indicators")
+        celebrity_check = fallback_celebrity_check(raw_profile, person_name)
+        is_celebrity = False
+        celebrity_reasoning = ""
+        if isinstance(celebrity_check, dict):
+            is_celebrity = bool(celebrity_check.get("is_celebrity", False))
+            celebrity_reasoning = str(celebrity_check.get("reasoning", "") or "").strip()
+        else:
+            is_celebrity = bool(celebrity_check)
+
+        if is_celebrity:
+            role_model = create_enhanced_self_role_model(raw_profile, person_name, celebrity_reasoning or "Celebrity profile")
             role_model["is_celebrity"] = True
-            role_model["celebrity_reasoning"] = "Heuristic celebrity indicators"
+            role_model["celebrity_reasoning"] = celebrity_reasoning or "Heuristic celebrity indicators"
         else:
             rm = find_celebrity_with_rules(raw_profile, person_name)
             if isinstance(rm, dict) and rm:
                 role_model = rm
                 role_model["is_celebrity"] = False
-                role_model["celebrity_reasoning"] = "Heuristic non-celebrity profile"
+                role_model["celebrity_reasoning"] = celebrity_reasoning or "Heuristic non-celebrity profile"
             else:
                 role_model = create_self_role_model(raw_profile, person_name)
                 role_model["is_celebrity"] = False
-                role_model["celebrity_reasoning"] = "No strong match; using self role model"
+                role_model["celebrity_reasoning"] = celebrity_reasoning or "No strong match; using self role model"
     except Exception:
         role_model = {"name": person_name, "similarity_reason": "Self role model", "is_celebrity": False}
 
