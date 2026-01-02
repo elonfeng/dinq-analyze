@@ -161,6 +161,14 @@ app.register_blueprint(analyze_bp)
 # Configure Sentry handler with initialization status
 configure_sentry_handler(sentry_initialized)
 
+# Local-first analysis: replicate cache artifacts to remote backup DB asynchronously (best-effort).
+try:
+    from server.tasks.backup_replicator import start_backup_replicator
+
+    start_backup_replicator()
+except Exception:
+    pass
+
 # Store active sessions
 active_sessions: Dict[str, Dict[str, Any]] = {}
 

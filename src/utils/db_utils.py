@@ -65,8 +65,23 @@ def _get_cache_db_url() -> str:
     )
 
 
+def _get_backup_db_url() -> str:
+    """
+    Resolve BACKUP DB URL from env.
+
+    This DB is used ONLY for asynchronous replication of analysis caches (outbox pattern).
+    It must NOT be on the online request critical path.
+
+    Env:
+      DINQ_BACKUP_DB_URL
+    """
+
+    return str(os.getenv("DINQ_BACKUP_DB_URL") or "").strip()
+
+
 DB_URL = _get_jobs_db_url()
 CACHE_DB_URL = _get_cache_db_url()
+BACKUP_DB_URL = _get_backup_db_url()
 
 
 def _create_engine(db_url: str, *, role: str):
@@ -160,6 +175,7 @@ def _create_engine(db_url: str, *, role: str):
 # - cache_engine: cross-job final_result cache (often remote Postgres as the single source of truth)
 jobs_engine = _create_engine(DB_URL, role="jobs")
 cache_engine = _create_engine(CACHE_DB_URL, role="cache")
+backup_engine = _create_engine(BACKUP_DB_URL, role="backup") if BACKUP_DB_URL else None
 
 # Backward-compatible alias: most of the codebase expects `engine` to be the primary DB.
 engine = jobs_engine
@@ -191,6 +207,7 @@ engine = jobs_engine
 # 创建会话工厂
 JobsSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=jobs_engine, expire_on_commit=False)
 CacheSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=cache_engine, expire_on_commit=False)
+BackupSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=backup_engine, expire_on_commit=False) if backup_engine is not None else None
 # Backward-compatible alias
 SessionLocal = JobsSessionLocal
 
@@ -228,6 +245,23 @@ def get_cache_db_session():
 
 
 @contextmanager
+def get_backup_db_session():
+    """获取 backup DB 会话（只用于异步备份/冷启动读回，不应该阻塞在线请求）。"""
+    if backup_engine is None or BackupSessionLocal is None:
+        raise ValueError("backup DB is not configured (set DINQ_BACKUP_DB_URL)")
+    session = BackupSessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"数据库会话错误(backup): {e}")
+        raise
+    finally:
+        session.close()
+
+
+@contextmanager
 def get_db_session():
     """
     Backward-compatible alias for jobs DB session.
@@ -248,6 +282,7 @@ _CACHE_TABLE_NAMES = {
     "analysis_artifact_cache",
     "analysis_runs",
     "analysis_resource_versions",
+    "analysis_backup_outbox",
 }
 
 
@@ -369,6 +404,50 @@ def create_tables():
     except SQLAlchemyError as e:
         logger.error(f"创建数据库表时出错: {e}")
         return False
+
+
+def backup_db_enabled() -> bool:
+    """Whether a remote backup DB is configured."""
+    return bool(str(BACKUP_DB_URL or "").strip()) and backup_engine is not None
+
+
+def ensure_sqlite_tables_created() -> None:
+    """
+    Best-effort: auto-create tables when using local SQLite engines.
+
+    Rationale:
+    - Local-first deployments frequently rely on SQLite files that may not exist yet.
+    - Creating tables is safe and fast for SQLite, and avoids manual bootstrap steps.
+    - This function NEVER touches non-SQLite engines (e.g. Postgres).
+    """
+
+    # Ensure all models are imported so Base.metadata is complete.
+    try:
+        import src.models.user_verification  # noqa: F401
+        import src.models.job_board  # noqa: F401
+        import src.models.user_interactions  # noqa: F401
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        if jobs_engine.dialect.name == "sqlite":
+            Base.metadata.create_all(bind=jobs_engine, tables=_tables_except_cache())
+    except Exception:
+        pass
+
+    try:
+        if cache_engine.dialect.name == "sqlite":
+            Base.metadata.create_all(bind=cache_engine, tables=_cache_tables())
+    except Exception:
+        pass
+
+
+# Auto-create tables for local SQLite engines (best-effort, non-blocking).
+try:
+    ensure_sqlite_tables_created()
+except Exception:
+    pass
+
 
 def drop_tables():
     """删除所有表（谨慎使用）"""

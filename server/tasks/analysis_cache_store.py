@@ -14,11 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 
 from src.models.db import AnalysisArtifactCache, AnalysisRun, AnalysisSubject
-from src.utils.db_utils import get_cache_db_session
+from src.utils.db_utils import backup_db_enabled, get_backup_db_session, get_cache_db_session
 from server.utils.sqlite_cache import get_sqlite_cache
 
 
@@ -67,6 +67,120 @@ class CachedRun:
 
 
 class AnalysisCacheStore:
+    def _backup_read_through_enabled(self) -> bool:
+        """
+        Whether cache reads should fall back to the remote backup DB when local cache misses.
+
+        Default: enabled when a backup DB is configured.
+        """
+
+        import os
+
+        if not backup_db_enabled():
+            return False
+        raw = str(os.getenv("DINQ_BACKUP_READ_THROUGH") or "true").strip().lower()
+        return raw in ("1", "true", "yes", "on")
+
+    def _enqueue_backup_outbox(self, *, session, artifact_key: str, kind: str, content_hash: str) -> None:  # type: ignore[no-untyped-def]
+        """
+        Best-effort: enqueue a replication task for the remote backup DB.
+
+        IMPORTANT: Must not raise or poison the caller transaction.
+        """
+
+        if not backup_db_enabled():
+            return
+
+        ak = str(artifact_key or "").strip()
+        k = str(kind or "").strip()
+        ch = str(content_hash or "").strip()
+        if not ak or not k or not ch:
+            return
+
+        try:
+            # Deduplicate by (artifact_key, content_hash) so repeated writes don't flood the backup.
+            session.execute(
+                text(
+                    "INSERT INTO analysis_backup_outbox(artifact_key, kind, content_hash, status, retry_count) "
+                    "VALUES(:artifact_key, :kind, :content_hash, 'pending', 0) "
+                    "ON CONFLICT(artifact_key, content_hash) DO NOTHING"
+                ),
+                {"artifact_key": ak, "kind": k, "content_hash": ch},
+            )
+        except Exception:
+            return
+
+    def _try_get_backup_artifact_cache(self, *, artifact_key: str) -> Optional[AnalysisArtifactCache]:
+        if not self._backup_read_through_enabled():
+            return None
+
+        ak = str(artifact_key or "").strip()
+        if not ak:
+            return None
+
+        try:
+            with get_backup_db_session() as session:
+                art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == ak).first()
+                if art is None:
+                    return None
+                if not isinstance(getattr(art, "payload", None), dict):
+                    return None
+                # Detach from backup session.
+                return AnalysisArtifactCache(
+                    artifact_key=str(getattr(art, "artifact_key", "") or ""),
+                    kind=str(getattr(art, "kind", "") or ""),
+                    payload=art.payload,
+                    content_hash=str(getattr(art, "content_hash", "") or "") or None,
+                    created_at=getattr(art, "created_at", None),
+                    expires_at=getattr(art, "expires_at", None),
+                    meta=art.meta if isinstance(getattr(art, "meta", None), dict) else (art.meta or {}),
+                )
+        except Exception:
+            return None
+
+    def _rehydrate_local_artifact_cache(self, *, artifact: AnalysisArtifactCache) -> None:
+        """
+        Best-effort: write a backup artifact_cache row into the local cache DB.
+
+        Must not enqueue replication again (avoid loops).
+        """
+
+        try:
+            ak = str(getattr(artifact, "artifact_key", "") or "").strip()
+            if not ak:
+                return
+            payload = getattr(artifact, "payload", None)
+            if not isinstance(payload, dict) or not payload:
+                return
+
+            with get_cache_db_session() as session:
+                existing = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == ak).first()
+                if existing is None:
+                    session.add(
+                        AnalysisArtifactCache(
+                            artifact_key=ak,
+                            kind=str(getattr(artifact, "kind", "") or ""),
+                            payload=payload,
+                            content_hash=str(getattr(artifact, "content_hash", "") or "") or None,
+                            created_at=getattr(artifact, "created_at", None) or datetime.utcnow(),
+                            expires_at=getattr(artifact, "expires_at", None),
+                            meta=getattr(artifact, "meta", None) if isinstance(getattr(artifact, "meta", None), dict) else {},
+                        )
+                    )
+                else:
+                    incoming_hash = str(getattr(artifact, "content_hash", "") or "")
+                    current_hash = str(getattr(existing, "content_hash", "") or "")
+                    if incoming_hash and incoming_hash != current_hash:
+                        existing.kind = str(getattr(artifact, "kind", "") or existing.kind)
+                        existing.payload = payload
+                        existing.content_hash = incoming_hash
+                        existing.created_at = getattr(artifact, "created_at", None) or getattr(existing, "created_at", None) or datetime.utcnow()
+                        existing.expires_at = getattr(artifact, "expires_at", None)
+                        existing.meta = getattr(artifact, "meta", None) if isinstance(getattr(artifact, "meta", None), dict) else (existing.meta or {})
+                session.flush()
+        except Exception:
+            return
+
     def _refresh_lock_ttl_seconds(self) -> int:
         """
         How long a "running" refresh lock is considered valid.
@@ -313,19 +427,34 @@ class AnalysisCacheStore:
         )
 
         now = datetime.utcnow()
-        with get_cache_db_session() as session:
-            art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
-            if art is None:
+        art: Optional[AnalysisArtifactCache]
+        try:
+            with get_cache_db_session() as session:
+                art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
+        except Exception:
+            art = None
+
+        if art is None:
+            backup_art = self._try_get_backup_artifact_cache(artifact_key=str(artifact_key))
+            if backup_art is None:
                 return None
-            expires_at = getattr(art, "expires_at", None)
+            expires_at = getattr(backup_art, "expires_at", None)
             if expires_at and isinstance(expires_at, datetime) and expires_at <= now:
-                # Best-effort cleanup.
-                try:
-                    session.delete(art)
-                except Exception:
-                    pass
                 return None
-            return art.payload if isinstance(getattr(art, "payload", None), dict) else None
+            self._rehydrate_local_artifact_cache(artifact=backup_art)
+            art = backup_art
+
+        expires_at = getattr(art, "expires_at", None)
+        if expires_at and isinstance(expires_at, datetime) and expires_at <= now:
+            # Best-effort cleanup.
+            try:
+                with get_cache_db_session() as session:
+                    session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).delete()
+            except Exception:
+                pass
+            return None
+
+        return art.payload if isinstance(getattr(art, "payload", None), dict) else None
 
     def get_cached_final_result(
         self,
@@ -359,41 +488,50 @@ class AnalysisCacheStore:
         )
 
         now = datetime.utcnow()
-        with get_cache_db_session() as session:
-            art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
-            if art is None or not isinstance(getattr(art, "payload", None), dict):
+        art: Optional[AnalysisArtifactCache]
+        try:
+            with get_cache_db_session() as session:
+                art = session.query(AnalysisArtifactCache).filter(AnalysisArtifactCache.artifact_key == artifact_key).first()
+        except Exception:
+            art = None
+
+        if art is None or not isinstance(getattr(art, "payload", None), dict):
+            backup_art = self._try_get_backup_artifact_cache(artifact_key=str(artifact_key))
+            if backup_art is None:
                 return None
+            self._rehydrate_local_artifact_cache(artifact=backup_art)
+            art = backup_art
 
-            expires_at = getattr(art, "expires_at", None)
-            stale = bool(isinstance(expires_at, datetime) and expires_at <= now)
-            payload = art.payload if isinstance(art.payload, dict) else None
-            if not isinstance(payload, dict) or not isinstance(payload.get("cards"), dict) or not payload.get("cards"):
-                return None
+        expires_at = getattr(art, "expires_at", None)
+        stale = bool(isinstance(expires_at, datetime) and expires_at <= now)
+        payload = art.payload if isinstance(art.payload, dict) else None
+        if not isinstance(payload, dict) or not isinstance(payload.get("cards"), dict) or not payload.get("cards"):
+            return None
 
-            # Best-effort: populate SQLite L1 so cache hits can avoid DB.
-            try:
-                cache = get_sqlite_cache()
-                if cache is not None:
-                    cache.set_json(
-                        key=str(artifact_key),
-                        value={
-                            "kind": "final_result",
-                            "payload": payload,
-                            "created_at": (getattr(art, "created_at", None) or now).isoformat(),
-                            "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else None,
-                        },
-                        expires_at_s=_dt_to_epoch_seconds(expires_at),
-                    )
-            except Exception:
-                pass
+        # Best-effort: populate SQLite L1 so cache hits can avoid DB.
+        try:
+            cache = get_sqlite_cache()
+            if cache is not None:
+                cache.set_json(
+                    key=str(artifact_key),
+                    value={
+                        "kind": "final_result",
+                        "payload": payload,
+                        "created_at": (getattr(art, "created_at", None) or now).isoformat(),
+                        "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else None,
+                    },
+                    expires_at_s=_dt_to_epoch_seconds(expires_at),
+                )
+        except Exception:
+            pass
 
-            return {
-                "artifact_key": str(artifact_key),
-                "payload": payload,
-                "created_at": getattr(art, "created_at", None),
-                "expires_at": expires_at,
-                "stale": stale,
-            }
+        return {
+            "artifact_key": str(artifact_key),
+            "payload": payload,
+            "created_at": getattr(art, "created_at", None),
+            "expires_at": expires_at,
+            "stale": stale,
+        }
 
     def save_cached_artifact(
         self,
@@ -452,6 +590,8 @@ class AnalysisCacheStore:
                 art.created_at = now
                 art.expires_at = expires_at
                 art.meta = meta or (art.meta or {})
+
+            self._enqueue_backup_outbox(session=session, artifact_key=str(artifact_key), kind=str(k), content_hash=str(content_hash))
             session.flush()
             return artifact_key
 
@@ -501,6 +641,8 @@ class AnalysisCacheStore:
                 art.created_at = now
                 art.expires_at = expires_at
                 art.meta = meta or (art.meta or {})
+
+            self._enqueue_backup_outbox(session=session, artifact_key=str(artifact_key), kind="full_report", content_hash=str(content_hash))
 
             # If a refresh run is in progress, finalize it. Otherwise create a completed run record.
             running = (
@@ -638,6 +780,8 @@ class AnalysisCacheStore:
                 art.created_at = now
                 art.expires_at = expires_at
                 art.meta = meta or (art.meta or {})
+
+            self._enqueue_backup_outbox(session=session, artifact_key=str(artifact_key), kind="final_result", content_hash=str(content_hash))
 
             # Finalize a refresh run if one is in progress (SWR background refresh).
             running = (

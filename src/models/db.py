@@ -1,7 +1,7 @@
 """
 Base database models and connection setup.
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 
@@ -301,6 +301,38 @@ class AnalysisResourceVersion(Base):
     expires_at = Column(DateTime, nullable=True, index=True)
     payload = Column(JSON, nullable=True)
     meta = Column(JSON, nullable=True)
+
+
+class AnalysisBackupOutbox(Base):
+    """
+    Local outbox for asynchronously replicating analysis cache artifacts to a remote backup DB.
+
+    Why:
+    - Keep online requests SQLite-only (low latency).
+    - Write to the remote backup DB asynchronously (eventual consistency).
+    - Deduplicate by (artifact_key, content_hash) so repeated saves don't flood the backup.
+    """
+
+    __tablename__ = "analysis_backup_outbox"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    artifact_key = Column(String(128), nullable=False, index=True)
+    kind = Column(String(64), nullable=False, index=True, comment="final_result|full_report|card:<type>|...")
+    content_hash = Column(String(128), nullable=True, index=True)
+
+    status = Column(String(20), nullable=False, default="pending", index=True, comment="pending|processing")
+    retry_count = Column(Integer, nullable=False, default=0)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
+    last_error = Column(Text, nullable=True)
+
+    locked_at = Column(DateTime, nullable=True, index=True)
+    lock_token = Column(String(64), nullable=True, index=True)
+
+    created_at = Column(DateTime, default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("artifact_key", "content_hash", name="uq_analysis_backup_outbox_artifact_content"),
+    )
 
 
 class AnalysisJobCard(Base):
