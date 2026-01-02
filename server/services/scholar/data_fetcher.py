@@ -972,6 +972,21 @@ class ScholarDataFetcher:
                 t_fetch = now_perf()
                 html_content = self.fetch_html(url, cancel_event=cancel_event, user_id=user_id)
                 fetch_ms = elapsed_ms(t_fetch)
+
+                # Best-effort fallback for page0:
+                # - Crawlbase sometimes returns consent/captcha HTML (non-profile page)
+                # - Requests sometimes gets blocked
+                # Firecrawl is slower but can be more robust; only try for first page.
+                fallback_used: Optional[str] = None
+                fallback_fetch_ms: Optional[int] = None
+                if not html_content and first_page:
+                    t_fb = now_perf()
+                    html_fb = self.fetch_html_firecrawl(url, cancel_event=cancel_event, user_id=user_id)
+                    fallback_fetch_ms = int(elapsed_ms(t_fb))
+                    if html_fb:
+                        html_content = html_fb
+                        fallback_used = "firecrawl"
+
                 if not html_content:
                     _emit(
                         "Scholar page fetch failed",
@@ -980,6 +995,8 @@ class ScholarDataFetcher:
                         page_idx=int(page_idx),
                         cstart=int(page_start),
                         fetch_ms=int(fetch_ms),
+                        fallback=fallback_used,
+                        fallback_fetch_ms=fallback_fetch_ms,
                         ok=False,
                     )
                     return None
@@ -991,6 +1008,24 @@ class ScholarDataFetcher:
                     page_size=page_size,
                 )
                 parse_ms = elapsed_ms(t_parse)
+
+                # If page0 HTML looks like a non-profile page (consent/captcha), try Firecrawl once.
+                if first_page and not parsed and fallback_used is None:
+                    t_fb2 = now_perf()
+                    html_fb2 = self.fetch_html_firecrawl(url, cancel_event=cancel_event, user_id=user_id)
+                    fb2_ms = int(elapsed_ms(t_fb2))
+                    if html_fb2 and html_fb2 != html_content:
+                        parsed_fb2 = self.parse_google_scholar_html(
+                            html_fb2,
+                            page_index=page_idx,
+                            first_page=first_page,
+                            page_size=page_size,
+                        )
+                        if parsed_fb2:
+                            parsed = parsed_fb2
+                            fallback_used = "firecrawl"
+                            fallback_fetch_ms = fb2_ms
+
                 _emit(
                     "Scholar page fetched",
                     kind="timing",
@@ -1000,6 +1035,8 @@ class ScholarDataFetcher:
                     fetch_ms=int(fetch_ms),
                     parse_ms=int(parse_ms),
                     duration_ms=int(fetch_ms + parse_ms),
+                    fallback=fallback_used,
+                    fallback_fetch_ms=fallback_fetch_ms,
                     ok=True,
                 )
 
