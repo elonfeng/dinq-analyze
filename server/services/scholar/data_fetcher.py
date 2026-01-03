@@ -856,6 +856,482 @@ class ScholarDataFetcher:
 
         return scholar_data
 
+    def _fetch_full_profile_via_html(
+        self,
+        *,
+        scholar_id: str,
+        max_papers: int = 500,
+        adaptive_max_papers: bool = False,
+        cancel_event=None,
+        user_id=None,
+        progress_callback: Optional[Callable[[Any], None]] = None,
+    ) -> Optional[dict]:
+        scholar_id = str(scholar_id or "").strip()
+        if not scholar_id:
+            return None
+
+        # Treat max_papers <= 0 as "unlimited" (fetch until no more pages).
+        try:
+            max_papers = int(max_papers)
+        except (TypeError, ValueError):
+            max_papers = 500
+        unlimited = max_papers <= 0
+        logger.info(
+            "[Scholar ID: %s] Fetching profile (max papers: %s)",
+            scholar_id,
+            "unlimited" if unlimited else str(max_papers),
+        )
+
+        full_profile = None
+        papers_collected = 0
+        current_page = 0
+        start_index = 0
+        years_of_papers: dict[int, int] = {}
+
+        # Optional multi-page concurrency (safe when Crawlbase is enabled; Requests path is still bounded by policy).
+        try:
+            page_concurrency = int(os.getenv("DINQ_SCHOLAR_PAGE_CONCURRENCY", "3") or "3")
+        except (TypeError, ValueError):
+            page_concurrency = 3
+        page_concurrency = max(1, min(int(page_concurrency), 8))
+        # Keep pagesize bounded. For page0 (max_papers small), this also reduces response size.
+        try:
+            page_size = 100 if unlimited else max(1, min(100, int(max_papers)))
+        except Exception:  # noqa: BLE001
+            page_size = 100
+        executor = ThreadPoolExecutor(max_workers=page_concurrency) if page_concurrency > 1 else None
+
+        try:
+            preview_max = int(os.getenv("DINQ_SCHOLAR_PREVIEW_MAX_PAPERS", "30") or "30")
+        except (TypeError, ValueError):
+            preview_max = 30
+        preview_max = max(0, min(int(preview_max), 200))
+        preview_emitted = 0
+
+        def _project_paper(paper: Any) -> Optional[dict]:
+            if not isinstance(paper, dict):
+                return None
+            title = str(paper.get("title") or "").strip()
+            if not title:
+                return None
+            year_raw = str(paper.get("year") or "").strip()
+            year = int(year_raw) if year_raw.isdigit() else None
+            venue = str(paper.get("venue") or "").strip() or None
+            citations_raw = str(paper.get("citations") or "").strip()
+            try:
+                citations = int(citations_raw) if citations_raw else 0
+            except Exception:  # noqa: BLE001
+                citations = 0
+            authors = paper.get("authors")
+            if isinstance(authors, list):
+                authors = [str(a) for a in authors if str(a).strip()][:8]
+            else:
+                authors = None
+
+            raw_id = f"{scholar_id}|{title}|{year_raw}|{venue or ''}".encode("utf-8", errors="ignore")
+            pid = hashlib.sha1(raw_id).hexdigest()[:16]
+            out: dict[str, Any] = {
+                "id": f"scholar:{scholar_id}:{pid}",
+                "title": title,
+                "citations": citations,
+            }
+            if year is not None:
+                out["year"] = year
+            if venue is not None:
+                out["venue"] = venue
+            if authors is not None:
+                out["authors"] = authors
+            if paper.get("author_position") is not None:
+                out["author_position"] = paper.get("author_position")
+            return out
+
+        def _emit(message: str, **extra: Any) -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback({"message": message, "progress": None, **extra})
+            except Exception:  # noqa: BLE001
+                return
+
+        def fetch_and_parse(page_start: int, page_idx: int, first_page: bool) -> Any:
+            raise_if_cancelled(cancel_event)
+            url = (
+                f"https://scholar.google.com/citations?user={scholar_id}&hl=en&oi=ao&"
+                f"cstart={page_start}&pagesize={page_size}"
+            )
+            t_fetch = now_perf()
+            html_content = self.fetch_html(url, cancel_event=cancel_event, user_id=user_id)
+            fetch_ms = elapsed_ms(t_fetch)
+
+            # Best-effort fallback for page0.
+            fallback_used: Optional[str] = None
+            fallback_fetch_ms: Optional[int] = None
+            if not html_content and first_page:
+                t_fb = now_perf()
+                html_fb = self.fetch_html_firecrawl(url, cancel_event=cancel_event, user_id=user_id)
+                fallback_fetch_ms = int(elapsed_ms(t_fb))
+                if html_fb:
+                    html_content = html_fb
+                    fallback_used = "firecrawl"
+
+            if not html_content:
+                _emit(
+                    "Scholar page fetch failed",
+                    kind="timing",
+                    stage="fetch_profile",
+                    page_idx=int(page_idx),
+                    cstart=int(page_start),
+                    fetch_ms=int(fetch_ms),
+                    fallback=fallback_used,
+                    fallback_fetch_ms=fallback_fetch_ms,
+                    ok=False,
+                )
+                return None
+            t_parse = now_perf()
+            parsed = self.parse_google_scholar_html(
+                html_content,
+                page_index=page_idx,
+                first_page=first_page,
+                page_size=page_size,
+            )
+            parse_ms = elapsed_ms(t_parse)
+
+            # If page0 HTML looks like a non-profile page (consent/captcha), try Firecrawl once.
+            if first_page and not parsed and fallback_used is None:
+                t_fb2 = now_perf()
+                html_fb2 = self.fetch_html_firecrawl(url, cancel_event=cancel_event, user_id=user_id)
+                fb2_ms = int(elapsed_ms(t_fb2))
+                if html_fb2 and html_fb2 != html_content:
+                    parsed_fb2 = self.parse_google_scholar_html(
+                        html_fb2,
+                        page_index=page_idx,
+                        first_page=first_page,
+                        page_size=page_size,
+                    )
+                    if parsed_fb2:
+                        parsed = parsed_fb2
+                        fallback_used = "firecrawl"
+                        fallback_fetch_ms = fb2_ms
+
+            _emit(
+                "Scholar page fetched",
+                kind="timing",
+                stage="fetch_profile",
+                page_idx=int(page_idx),
+                cstart=int(page_start),
+                fetch_ms=int(fetch_ms),
+                parse_ms=int(parse_ms),
+                duration_ms=int(fetch_ms + parse_ms),
+                fallback=fallback_used,
+                fallback_fetch_ms=fallback_fetch_ms,
+                ok=True,
+            )
+
+            # Phase-2 UX: emit early profile/metrics previews from page0 as soon as it's parsed.
+            if first_page and isinstance(parsed, dict):
+                try:
+                    papers = parsed.get("papers") if isinstance(parsed.get("papers"), list) else []
+                    year_dist: dict[int, int] = {}
+                    for p in papers:
+                        if not isinstance(p, dict):
+                            continue
+                        year_raw = p.get("year")
+                        if year_raw is None:
+                            continue
+                        year_s = str(year_raw).strip()
+                        if not year_s.isdigit():
+                            continue
+                        y = int(year_s)
+                        year_dist[y] = year_dist.get(y, 0) + 1
+
+                    profile_preview = {
+                        "name": parsed.get("name") or "",
+                        "abbreviated_name": parsed.get("abbreviated_name") or "",
+                        "affiliation": parsed.get("affiliation") or "",
+                        "email": parsed.get("email") or "",
+                        "research_fields": parsed.get("research_fields") or [],
+                        "total_citations": parsed.get("total_citations") or 0,
+                        "citations_5y": parsed.get("citations_5y") or 0,
+                        "h_index": parsed.get("h_index") or 0,
+                        "h_index_5y": parsed.get("h_index_5y") or 0,
+                        "yearly_citations": parsed.get("yearly_citations") or {},
+                        "scholar_id": parsed.get("scholar_id") or scholar_id,
+                    }
+                    metrics_preview = {
+                        "papers_loaded": len(papers),
+                        "year_distribution": year_dist,
+                    }
+
+                    _emit(
+                        "Scholar page0 profile/metrics preview",
+                        prefill_cards=[
+                            {
+                                "card": "profile",
+                                "data": profile_preview,
+                                "meta": {"partial": True, "source": "page0"},
+                            },
+                            {
+                                "card": "metrics",
+                                "data": metrics_preview,
+                                "meta": {"partial": True, "source": "page0"},
+                            },
+                        ],
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            return parsed
+
+        try:
+            while True:
+                if not unlimited and max_papers > 0 and papers_collected >= max_papers:
+                    break
+                raise_if_cancelled(cancel_event)
+
+                # First page is always fetched serially (profile fields live there).
+                if current_page == 0 or executor is None:
+                    batch_starts = [start_index]
+                else:
+                    batch_n = page_concurrency
+                    if not unlimited and max_papers > 0:
+                        remaining = max_papers - papers_collected
+                        if remaining <= 0:
+                            break
+                        remaining_pages = (remaining + page_size - 1) // page_size
+                        batch_n = max(1, min(batch_n, int(remaining_pages)))
+                    batch_starts = [start_index + page_size * i for i in range(batch_n)]
+
+                results: list[tuple[int, Any]] = []
+                if executor is None or len(batch_starts) == 1:
+                    s = int(batch_starts[0])
+                    logger.info(f"[Scholar ID: {scholar_id}] Fetching page {current_page+1} (start index: {s})")
+                    page_data = fetch_and_parse(s, current_page, first_page=(current_page == 0))
+                    results.append((s, page_data))
+                else:
+                    futures = {}
+                    for i, s in enumerate(batch_starts):
+                        page_idx = current_page + int(i)
+                        logger.info(f"[Scholar ID: {scholar_id}] Fetching page {page_idx+1} (start index: {s})")
+                        futures[executor.submit(fetch_and_parse, int(s), int(page_idx), False)] = int(s)
+                    for fut in as_completed(futures):
+                        s = futures[fut]
+                        try:
+                            page_data = fut.result()
+                        except Exception as e:
+                            logger.error(f"[Scholar ID: {scholar_id}] Error fetching page at start index {s}: {e}")
+                            page_data = None
+                        results.append((int(s), page_data))
+                    results.sort(key=lambda t: t[0])
+
+                stop = False
+                for s, page_data in results:
+                    if not page_data:
+                        logger.error(
+                            f"[Scholar ID: {scholar_id}] Failed to fetch/parse page {current_page+1} (start index: {s})"
+                        )
+                        stop = True
+                        break
+
+                    page_papers = page_data.get('papers', []) or []
+                    add_papers = page_papers
+                    if not unlimited and max_papers > 0:
+                        remaining = max_papers - papers_collected
+                        if remaining <= 0:
+                            add_papers = []
+                        else:
+                            add_papers = page_papers[:remaining]
+
+                    if full_profile is None:
+                        # Use deep copy to avoid accidental shared references across pages.
+                        full_profile = copy.deepcopy(page_data)
+                        full_profile['papers'] = list(add_papers)
+                        papers_collected = len(add_papers)
+                        logger.info(f"[Scholar ID: {scholar_id}] Page {current_page+1} fetched {papers_collected} papers")
+
+                        # Adaptive mode: for small profiles, stop early even if caller asked for more pages.
+                        if adaptive_max_papers and (not unlimited) and max_papers and int(max_papers) > page_size:
+                            try:
+                                total_citations = int(page_data.get("total_citations") or 0)
+                            except Exception:  # noqa: BLE001
+                                total_citations = 0
+                            try:
+                                h_index = int(page_data.get("h_index") or 0)
+                            except Exception:  # noqa: BLE001
+                                h_index = 0
+
+                            # Heuristic thresholds (kept intentionally simple for speed-first UX).
+                            if total_citations < 5000 and h_index < 20:
+                                max_papers = min(int(max_papers), page_size)
+                                logger.info(
+                                    "[Scholar ID: %s] Adaptive max_papers enabled (citations=%s, h_index=%s) -> %s",
+                                    scholar_id,
+                                    total_citations,
+                                    h_index,
+                                    max_papers,
+                                )
+                    else:
+                        if len(add_papers) == 0:
+                            logger.info(f"[Scholar ID: {scholar_id}] No more papers to add, stopping")
+                            stop = True
+                            break
+                        full_profile['papers'].extend(add_papers)
+                        papers_collected += len(add_papers)
+                        logger.info(
+                            f"[Scholar ID: {scholar_id}] Page {current_page+1} fetched {len(add_papers)} papers, total: {papers_collected}"
+                        )
+
+                    if preview_max > 0 and preview_emitted < preview_max:
+                        remaining = max(0, int(preview_max - preview_emitted))
+                        batch = add_papers[:remaining] if remaining > 0 else []
+                        projected = [x for x in (_project_paper(p) for p in batch) if x is not None]
+                        if projected:
+                            preview_emitted += len(projected)
+                            _emit(
+                                "Scholar papers preview",
+                                append={
+                                    "card": "papers",
+                                    "path": "items",
+                                    "items": projected,
+                                    "dedup_key": "id",
+                                    "cursor": {"cstart": int(s)},
+                                    "partial": bool(page_data.get("has_next_page", False)),
+                                },
+                            )
+
+                    # Update year distribution incrementally (avoids an extra full scan later).
+                    for idx, paper in enumerate(add_papers):
+                        if idx % 50 == 0:
+                            raise_if_cancelled(cancel_event)
+                        year = paper.get('year', '')
+                        if year and isinstance(year, str) and year.strip().isdigit():
+                            y = int(year.strip())
+                            years_of_papers[y] = years_of_papers.get(y, 0) + 1
+
+                    # Advance to next page
+                    start_index = int(s) + page_size
+                    current_page += 1
+
+                    has_next = bool(page_data.get('has_next_page', False))
+                    if not has_next:
+                        logger.info(f"[Scholar ID: {scholar_id}] No more pages available")
+                        stop = True
+                        break
+                    if not unlimited and max_papers > 0 and papers_collected >= max_papers:
+                        logger.info(f"[Scholar ID: {scholar_id}] Reached max papers limit: {max_papers}")
+                        stop = True
+                        break
+
+                if stop:
+                    break
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True)
+
+        if full_profile:
+            total_papers = len(full_profile.get('papers', []))
+            logger.info(f"[Scholar ID: {scholar_id}] Profile fetching completed")
+            logger.info(f"[Scholar ID: {scholar_id}] Total papers found: {total_papers}")
+            full_profile['years_of_papers'] = years_of_papers
+            full_profile['scholar_id'] = scholar_id
+            logger.info(f"[Scholar ID: {scholar_id}] Successfully fetched profile with {total_papers} papers")
+            return full_profile
+
+        logger.error(f"[Scholar ID: {scholar_id}] Failed to fetch profile")
+        return None
+
+    def _coerce_scholarly_profile_schema(self, profile: Any, *, scholar_id: Optional[str] = None) -> Optional[dict]:
+        if not isinstance(profile, dict):
+            return None
+
+        sid = str(scholar_id or profile.get("scholar_id") or "").strip() or None
+        out = copy.deepcopy(profile)
+        if sid is not None:
+            out["scholar_id"] = sid
+
+        # Map basics to our internal schema.
+        if "total_citations" not in out and out.get("citedby") is not None:
+            out["total_citations"] = out.get("citedby")
+        if "citations_5y" not in out and out.get("citedby5y") is not None:
+            out["citations_5y"] = out.get("citedby5y")
+        if "research_fields" not in out and out.get("interests") is not None:
+            out["research_fields"] = out.get("interests")
+        if "email" not in out and out.get("email_domain") is not None:
+            out["email"] = out.get("email_domain")
+        if "abbreviated_name" not in out and out.get("name") is not None:
+            out["abbreviated_name"] = out.get("name")
+
+        papers: list[dict] = []
+        years_of_papers: dict[int, int] = {}
+
+        pubs = out.get("publications")
+        if isinstance(pubs, list):
+            for pub in pubs:
+                if not isinstance(pub, dict):
+                    continue
+                bib = pub.get("bib") if isinstance(pub.get("bib"), dict) else {}
+                title = normalize_scholar_paper_title(str(bib.get("title") or "").strip())
+                if not title:
+                    continue
+
+                year = str(bib.get("pub_year") or bib.get("year") or "").strip()
+                citations = pub.get("num_citations")
+                if citations is None:
+                    citations = pub.get("citedby")
+                try:
+                    citations_i = int(citations) if citations is not None else 0
+                except Exception:  # noqa: BLE001
+                    citations_i = 0
+
+                venue = str(bib.get("venue") or bib.get("citation") or "").strip()
+                if not venue:
+                    venue = ""
+
+                authors_raw = bib.get("author") or bib.get("authors")
+                authors: list[str] = []
+                if isinstance(authors_raw, list):
+                    authors = [str(a).strip() for a in authors_raw if str(a).strip()]
+                elif isinstance(authors_raw, str) and authors_raw.strip():
+                    s = authors_raw.strip()
+                    if " and " in s and "," not in s:
+                        authors = [a.strip() for a in s.split(" and ") if a.strip()]
+                    else:
+                        authors = [a.strip() for a in s.split(",") if a.strip()]
+
+                paper_data: dict[str, Any] = {
+                    "title": title,
+                    "year": year,
+                    "authors": authors,
+                    "venue": venue,
+                    "citations": str(citations_i),
+                    "author_position": -1,
+                }
+                papers.append(paper_data)
+
+                if year.isdigit():
+                    y = int(year)
+                    years_of_papers[y] = years_of_papers.get(y, 0) + 1
+
+        out["papers"] = papers
+        out["years_of_papers"] = years_of_papers
+
+        # Compute h-index if missing and we have citations.
+        if out.get("h_index") is None and papers:
+            try:
+                cites_sorted = sorted(
+                    [int(p.get("citations") or 0) for p in papers],
+                    reverse=True,
+                )
+                h = 0
+                for idx, c in enumerate(cites_sorted, start=1):
+                    if c >= idx:
+                        h = idx
+                    else:
+                        break
+                out["h_index"] = h
+            except Exception:  # noqa: BLE001
+                pass
+
+        return out
+
     def get_full_profile(
         self,
         author_info,
@@ -875,391 +1351,52 @@ class ScholarDataFetcher:
         Returns:
             dict: Complete author profile
         """
-        if self.use_crawlbase:
-            scholar_id = author_info.get('scholar_id')
-            if not scholar_id:
-                return None
+        scholar_id = None
+        try:
+            if isinstance(author_info, dict):
+                scholar_id = author_info.get("scholar_id")
+        except Exception:  # noqa: BLE001
+            scholar_id = None
 
-            # Treat max_papers <= 0 as "unlimited" (fetch until no more pages).
-            try:
-                max_papers = int(max_papers)
-            except (TypeError, ValueError):
-                max_papers = 500
-            unlimited = max_papers <= 0
-            logger.info(
-                "[Scholar ID: %s] Fetching profile (max papers: %s)",
-                scholar_id,
-                "unlimited" if unlimited else str(max_papers),
+        # Prefer our HTML parser for a stable internal schema (papers/metrics) regardless of Crawlbase.
+        if scholar_id:
+            profile = self._fetch_full_profile_via_html(
+                scholar_id=str(scholar_id),
+                max_papers=max_papers,
+                adaptive_max_papers=adaptive_max_papers,
+                cancel_event=cancel_event,
+                user_id=user_id,
+                progress_callback=progress_callback,
             )
+            if profile:
+                return profile
 
-            full_profile = None
-            papers_collected = 0
-            current_page = 0
-            start_index = 0
-            years_of_papers: dict[int, int] = {}
-
-            # Optional multi-page concurrency (Crawlbase path only).
-            try:
-                page_concurrency = int(os.getenv("DINQ_SCHOLAR_PAGE_CONCURRENCY", "3") or "3")
-            except (TypeError, ValueError):
-                page_concurrency = 3
-            page_concurrency = max(1, min(int(page_concurrency), 8))
-            # Keep pagesize bounded. For page0 (max_papers small), this also reduces response size
-            # and improves first-screen latency under Crawlbase.
-            try:
-                page_size = 100 if unlimited else max(1, min(100, int(max_papers)))
-            except Exception:  # noqa: BLE001
-                page_size = 100
-            executor = ThreadPoolExecutor(max_workers=page_concurrency) if page_concurrency > 1 else None
-
-            try:
-                preview_max = int(os.getenv("DINQ_SCHOLAR_PREVIEW_MAX_PAPERS", "30") or "30")
-            except (TypeError, ValueError):
-                preview_max = 30
-            preview_max = max(0, min(int(preview_max), 200))
-            preview_emitted = 0
-
-            def _project_paper(paper: Any) -> Optional[dict]:
-                if not isinstance(paper, dict):
-                    return None
-                title = str(paper.get("title") or "").strip()
-                if not title:
-                    return None
-                year_raw = str(paper.get("year") or "").strip()
-                year = int(year_raw) if year_raw.isdigit() else None
-                venue = str(paper.get("venue") or "").strip() or None
-                citations_raw = str(paper.get("citations") or "").strip()
-                try:
-                    citations = int(citations_raw) if citations_raw else 0
-                except Exception:  # noqa: BLE001
-                    citations = 0
-                authors = paper.get("authors")
-                if isinstance(authors, list):
-                    authors = [str(a) for a in authors if str(a).strip()][:8]
-                else:
-                    authors = None
-
-                raw_id = f"{scholar_id}|{title}|{year_raw}|{venue or ''}".encode("utf-8", errors="ignore")
-                pid = hashlib.sha1(raw_id).hexdigest()[:16]
-                out: dict[str, Any] = {
-                    "id": f"scholar:{scholar_id}:{pid}",
-                    "title": title,
-                    "citations": citations,
-                }
-                if year is not None:
-                    out["year"] = year
-                if venue is not None:
-                    out["venue"] = venue
-                if authors is not None:
-                    out["authors"] = authors
-                if paper.get("author_position") is not None:
-                    out["author_position"] = paper.get("author_position")
-                return out
-
-            def _emit(message: str, **extra: Any) -> None:
-                if progress_callback is None:
-                    return
-                try:
-                    progress_callback({"message": message, "progress": None, **extra})
-                except Exception:  # noqa: BLE001
-                    return
-
-            def fetch_and_parse(page_start: int, page_idx: int, first_page: bool) -> Any:
-                raise_if_cancelled(cancel_event)
-                url = (
-                    f"https://scholar.google.com/citations?user={scholar_id}&hl=en&oi=ao&"
-                    f"cstart={page_start}&pagesize={page_size}"
-                )
-                t_fetch = now_perf()
-                html_content = self.fetch_html(url, cancel_event=cancel_event, user_id=user_id)
-                fetch_ms = elapsed_ms(t_fetch)
-
-                # Best-effort fallback for page0:
-                # - Crawlbase sometimes returns consent/captcha HTML (non-profile page)
-                # - Requests sometimes gets blocked
-                # Firecrawl is slower but can be more robust; only try for first page.
-                fallback_used: Optional[str] = None
-                fallback_fetch_ms: Optional[int] = None
-                if not html_content and first_page:
-                    t_fb = now_perf()
-                    html_fb = self.fetch_html_firecrawl(url, cancel_event=cancel_event, user_id=user_id)
-                    fallback_fetch_ms = int(elapsed_ms(t_fb))
-                    if html_fb:
-                        html_content = html_fb
-                        fallback_used = "firecrawl"
-
-                if not html_content:
-                    _emit(
-                        "Scholar page fetch failed",
-                        kind="timing",
-                        stage="fetch_profile",
-                        page_idx=int(page_idx),
-                        cstart=int(page_start),
-                        fetch_ms=int(fetch_ms),
-                        fallback=fallback_used,
-                        fallback_fetch_ms=fallback_fetch_ms,
-                        ok=False,
-                    )
-                    return None
-                t_parse = now_perf()
-                parsed = self.parse_google_scholar_html(
-                    html_content,
-                    page_index=page_idx,
-                    first_page=first_page,
-                    page_size=page_size,
-                )
-                parse_ms = elapsed_ms(t_parse)
-
-                # If page0 HTML looks like a non-profile page (consent/captcha), try Firecrawl once.
-                if first_page and not parsed and fallback_used is None:
-                    t_fb2 = now_perf()
-                    html_fb2 = self.fetch_html_firecrawl(url, cancel_event=cancel_event, user_id=user_id)
-                    fb2_ms = int(elapsed_ms(t_fb2))
-                    if html_fb2 and html_fb2 != html_content:
-                        parsed_fb2 = self.parse_google_scholar_html(
-                            html_fb2,
-                            page_index=page_idx,
-                            first_page=first_page,
-                            page_size=page_size,
-                        )
-                        if parsed_fb2:
-                            parsed = parsed_fb2
-                            fallback_used = "firecrawl"
-                            fallback_fetch_ms = fb2_ms
-
-                _emit(
-                    "Scholar page fetched",
-                    kind="timing",
-                    stage="fetch_profile",
-                    page_idx=int(page_idx),
-                    cstart=int(page_start),
-                    fetch_ms=int(fetch_ms),
-                    parse_ms=int(parse_ms),
-                    duration_ms=int(fetch_ms + parse_ms),
-                    fallback=fallback_used,
-                    fallback_fetch_ms=fallback_fetch_ms,
-                    ok=True,
-                )
-
-                # Phase-2 UX: emit early profile/metrics previews from page0 as soon as it's parsed.
-                # This allows the UI to render key identity + core citation metrics without waiting for
-                # the full multi-page fetch/analyze stages to finish.
-                if first_page and isinstance(parsed, dict):
-                    try:
-                        papers = parsed.get("papers") if isinstance(parsed.get("papers"), list) else []
-                        year_dist: dict[int, int] = {}
-                        for p in papers:
-                            if not isinstance(p, dict):
-                                continue
-                            year_raw = p.get("year")
-                            if year_raw is None:
-                                continue
-                            year_s = str(year_raw).strip()
-                            if not year_s.isdigit():
-                                continue
-                            y = int(year_s)
-                            year_dist[y] = year_dist.get(y, 0) + 1
-
-                        profile_preview = {
-                            "name": parsed.get("name") or "",
-                            "abbreviated_name": parsed.get("abbreviated_name") or "",
-                            "affiliation": parsed.get("affiliation") or "",
-                            "email": parsed.get("email") or "",
-                            "research_fields": parsed.get("research_fields") or [],
-                            "total_citations": parsed.get("total_citations") or 0,
-                            "citations_5y": parsed.get("citations_5y") or 0,
-                            "h_index": parsed.get("h_index") or 0,
-                            "h_index_5y": parsed.get("h_index_5y") or 0,
-                            "yearly_citations": parsed.get("yearly_citations") or {},
-                            "scholar_id": parsed.get("scholar_id") or scholar_id,
-                        }
-                        metrics_preview = {
-                            "papers_loaded": len(papers),
-                            "year_distribution": year_dist,
-                        }
-
-                        _emit(
-                            "Scholar page0 profile/metrics preview",
-                            prefill_cards=[
-                                {
-                                    "card": "profile",
-                                    "data": profile_preview,
-                                    "meta": {"partial": True, "source": "page0"},
-                                },
-                                {
-                                    "card": "metrics",
-                                    "data": metrics_preview,
-                                    "meta": {"partial": True, "source": "page0"},
-                                },
-                            ],
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-                return parsed
-
-            try:
-                while True:
-                    if not unlimited and max_papers > 0 and papers_collected >= max_papers:
-                        break
-                    raise_if_cancelled(cancel_event)
-
-                    # First page is always fetched serially (profile fields live there).
-                    if current_page == 0 or executor is None:
-                        batch_starts = [start_index]
-                    else:
-                        batch_n = page_concurrency
-                        if not unlimited and max_papers > 0:
-                            remaining = max_papers - papers_collected
-                            if remaining <= 0:
-                                break
-                            remaining_pages = (remaining + page_size - 1) // page_size
-                            batch_n = max(1, min(batch_n, int(remaining_pages)))
-                        batch_starts = [start_index + page_size * i for i in range(batch_n)]
-
-                    results: list[tuple[int, Any]] = []
-                    if executor is None or len(batch_starts) == 1:
-                        s = int(batch_starts[0])
-                        logger.info(f"[Scholar ID: {scholar_id}] Fetching page {current_page+1} (start index: {s})")
-                        page_data = fetch_and_parse(s, current_page, first_page=(current_page == 0))
-                        results.append((s, page_data))
-                    else:
-                        futures = {}
-                        for i, s in enumerate(batch_starts):
-                            page_idx = current_page + int(i)
-                            logger.info(f"[Scholar ID: {scholar_id}] Fetching page {page_idx+1} (start index: {s})")
-                            futures[executor.submit(fetch_and_parse, int(s), int(page_idx), False)] = int(s)
-                        for fut in as_completed(futures):
-                            s = futures[fut]
-                            try:
-                                page_data = fut.result()
-                            except Exception as e:
-                                logger.error(f"[Scholar ID: {scholar_id}] Error fetching page at start index {s}: {e}")
-                                page_data = None
-                            results.append((int(s), page_data))
-                        results.sort(key=lambda t: t[0])
-
-                    stop = False
-                    for s, page_data in results:
-                        if not page_data:
-                            logger.error(f"[Scholar ID: {scholar_id}] Failed to fetch/parse page {current_page+1} (start index: {s})")
-                            stop = True
-                            break
-
-                        page_papers = page_data.get('papers', []) or []
-                        add_papers = page_papers
-                        if not unlimited and max_papers > 0:
-                            remaining = max_papers - papers_collected
-                            if remaining <= 0:
-                                add_papers = []
-                            else:
-                                add_papers = page_papers[:remaining]
-
-                        if full_profile is None:
-                            # Use deep copy to avoid accidental shared references across pages.
-                            full_profile = copy.deepcopy(page_data)
-                            full_profile['papers'] = list(add_papers)
-                            papers_collected = len(add_papers)
-                            logger.info(f"[Scholar ID: {scholar_id}] Page {current_page+1} fetched {papers_collected} papers")
-
-                            # Adaptive mode: for small profiles, stop early even if caller asked for more pages.
-                            if adaptive_max_papers and (not unlimited) and max_papers and int(max_papers) > page_size:
-                                try:
-                                    total_citations = int(page_data.get("total_citations") or 0)
-                                except Exception:  # noqa: BLE001
-                                    total_citations = 0
-                                try:
-                                    h_index = int(page_data.get("h_index") or 0)
-                                except Exception:  # noqa: BLE001
-                                    h_index = 0
-
-                                # Heuristic thresholds (kept intentionally simple for speed-first UX).
-                                if total_citations < 5000 and h_index < 20:
-                                    max_papers = min(int(max_papers), page_size)
-                                    logger.info(
-                                        "[Scholar ID: %s] Adaptive max_papers enabled (citations=%s, h_index=%s) -> %s",
-                                        scholar_id,
-                                        total_citations,
-                                        h_index,
-                                        max_papers,
-                                    )
-                        else:
-                            if len(add_papers) == 0:
-                                logger.info(f"[Scholar ID: {scholar_id}] No more papers to add, stopping")
-                                stop = True
-                                break
-                            full_profile['papers'].extend(add_papers)
-                            papers_collected += len(add_papers)
-                            logger.info(f"[Scholar ID: {scholar_id}] Page {current_page+1} fetched {len(add_papers)} papers, total: {papers_collected}")
-
-                        if preview_max > 0 and preview_emitted < preview_max:
-                            remaining = max(0, int(preview_max - preview_emitted))
-                            batch = add_papers[:remaining] if remaining > 0 else []
-                            projected = [x for x in (_project_paper(p) for p in batch) if x is not None]
-                            if projected:
-                                preview_emitted += len(projected)
-                                _emit(
-                                    "Scholar papers preview",
-                                    append={
-                                        "card": "papers",
-                                        "path": "items",
-                                        "items": projected,
-                                        "dedup_key": "id",
-                                        "cursor": {"cstart": int(s)},
-                                        "partial": bool(page_data.get("has_next_page", False)),
-                                    },
-                                )
-
-                        # Update year distribution incrementally (avoids an extra full scan later).
-                        for idx, paper in enumerate(add_papers):
-                            if idx % 50 == 0:
-                                raise_if_cancelled(cancel_event)
-                            year = paper.get('year', '')
-                            if year and isinstance(year, str) and year.strip().isdigit():
-                                y = int(year.strip())
-                                years_of_papers[y] = years_of_papers.get(y, 0) + 1
-
-                        # Advance to next page
-                        start_index = int(s) + page_size
-                        current_page += 1
-
-                        has_next = bool(page_data.get('has_next_page', False))
-                        if not has_next:
-                            logger.info(f"[Scholar ID: {scholar_id}] No more pages available")
-                            stop = True
-                            break
-                        if not unlimited and max_papers > 0 and papers_collected >= max_papers:
-                            logger.info(f"[Scholar ID: {scholar_id}] Reached max papers limit: {max_papers}")
-                            stop = True
-                            break
-
-                    if stop:
-                        break
-            finally:
-                if executor is not None:
-                    executor.shutdown(wait=True)
-
-            if full_profile:
-                total_papers = len(full_profile.get('papers', []))
-                logger.info(f"[Scholar ID: {scholar_id}] Profile fetching completed")
-                logger.info(f"[Scholar ID: {scholar_id}] Total papers found: {total_papers}")
-                full_profile['years_of_papers'] = years_of_papers
-                logger.info(f"[Scholar ID: {scholar_id}] Successfully fetched profile with {total_papers} papers")
-                return full_profile
-
-            logger.error(f"[Scholar ID: {scholar_id}] Failed to fetch profile")
+        # Fallback: scholarly (may lack papers/metrics depending on version); coerce schema for downstream analyzers.
+        if scholarly is None:
             return None
 
-        if author_info:
-            researcher_name = author_info.get('name', 'researcher')
-            scholar_id = author_info.get('scholar_id', 'unknown_id')
-            logger.info(f"[Scholar ID: {scholar_id}] Retrieving full profile for {researcher_name}")
-            try:
-                result = scholarly.fill(author_info, sections=['basics', 'publications', 'coauthors'])
-                logger.info(f"[Scholar ID: {scholar_id}] Successfully retrieved full profile")
-                return result
-            except Exception as e:
-                logger.error(f"[Scholar ID: {scholar_id}] Error retrieving full profile: {e}")
-        return None
+        try:
+            author_obj = author_info
+            if isinstance(author_info, dict) and author_info.get("container_type") is None and scholar_id:
+                author_obj = self.search_researcher(scholar_id=str(scholar_id), user_id=user_id)
+
+            if not author_obj:
+                return None
+
+            researcher_name = author_obj.get('name', 'researcher') if isinstance(author_obj, dict) else 'researcher'
+            sid = None
+            if isinstance(author_obj, dict):
+                sid = author_obj.get("scholar_id") or scholar_id or "unknown_id"
+            logger.info(f"[Scholar ID: {sid}] Retrieving full profile for {researcher_name}")
+            result = scholarly.fill(author_obj, sections=['basics', 'publications', 'coauthors'])
+            coerced = self._coerce_scholarly_profile_schema(result, scholar_id=str(sid) if sid else None)
+            if coerced is None:
+                return None
+            logger.info(f"[Scholar ID: {sid}] Successfully retrieved full profile (scholarly fallback)")
+            return coerced
+        except Exception as e:
+            logger.error(f"[Scholar ID: {scholar_id or 'unknown_id'}] Error retrieving full profile: {e}")
+            return None
 
     def get_author_details_by_id(self, scholar_id):
         """

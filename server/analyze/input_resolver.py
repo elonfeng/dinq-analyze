@@ -107,6 +107,16 @@ def resolve_scholar_identity(input_payload: Dict[str, Any]) -> Tuple[Optional[st
     if not content:
         return None, None
 
+    # Support bare query-string fragments like "user=Y-ql3zMAAAAJ" (common client bug).
+    try:
+        m = re.search(r"(?:^|[?&])user=([A-Za-z0-9_-]{4,32}A{4,6}J)(?:$|[&#])", content.strip())
+        if m:
+            candidate = m.group(1).strip()
+            if _SCHOLAR_ID_RE.match(candidate):
+                return candidate, None
+    except Exception:  # noqa: BLE001
+        pass
+
     # Support Scholar profile URLs and shorthand forms like:
     # - https://scholar.google.com/citations?user=...&hl=en
     # - scholar?user=...
