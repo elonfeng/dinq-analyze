@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional, Tuple
 # }
 _STREAM_SPECS: Dict[Tuple[str, str], Dict[str, Any]] = {
     # Scholar: critical review is a single markdown/text stream.
-    ("scholar", "criticalReview"): {"field": "evaluation", "format": "markdown", "sections": ["main"], "route": "fixed", "flush_chars": 60},
+    ("scholar", "criticalreview"): {"field": "evaluation", "format": "markdown", "sections": ["main"], "route": "fixed", "flush_chars": 60},
     # GitHub: roast is a single markdown/text stream.
     ("github", "roast"): {"field": "roast", "format": "markdown", "sections": ["main"], "route": "fixed"},
     # LinkedIn: roast/summary.about are single streams.
