@@ -445,9 +445,14 @@ def run_scholar_preview(
 
     sid = str(scholar_id or "").strip() or None
     query = str(researcher_name or "").strip() or None
-    display_name = query or (sid or "")
 
-    avatar = get_random_avatar()
+    # Preview is a "skeleton" only; avoid showing scholar_id as the person's name (bad UX flicker).
+    display_name = query
+
+    # If the user provided a stable scholar_id, avoid showing a random avatar that will be
+    # replaced almost immediately by the real photo (bad flicker). For name-queries, keep a
+    # lightweight placeholder avatar so the UI isn't blank while resolving candidates.
+    avatar = get_random_avatar() if query else None
     # Avoid "made-up" content; keep description empty for preview.
     description = ""
 
