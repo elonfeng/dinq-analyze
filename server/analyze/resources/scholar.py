@@ -746,12 +746,22 @@ def run_scholar_page0(
                 )
 
             if pub_stats or researcher:
+                # Page0 does not run the heavy publication analyzer, so `total_papers` may be missing.
+                # Use the real papers loaded on page0 (bounded by max_papers_page0) to avoid showing `0`
+                # while the full report is still running.
+                total_papers = pub_stats.get("total_papers") if isinstance(pub_stats, dict) else None
+                if total_papers is None and isinstance(pub_stats, dict):
+                    total_papers = pub_stats.get("papers_loaded")
+                if total_papers is None:
+                    papers_preview = out.get("papers_preview") if isinstance(out.get("papers_preview"), list) else []
+                    if papers_preview:
+                        total_papers = len(papers_preview)
                 prefills.append(
                     {
                         "card": "publicationStats",
                         "data": {
                             "blockTitle": "Papers",
-                            "totalPapers": pub_stats.get("total_papers"),
+                            "totalPapers": total_papers,
                             "totalCitations": researcher.get("total_citations"),
                             "hIndex": researcher.get("h_index"),
                             "yearlyCitations": researcher.get("yearly_citations") if isinstance(researcher.get("yearly_citations"), dict) else {},
