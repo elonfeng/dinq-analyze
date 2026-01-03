@@ -127,6 +127,38 @@ class TestScholarPipeline(unittest.TestCase):
         self.assertEqual(len(fetcher.profile_calls), 0)
         self.assertEqual(analyzer.analyze_pub_calls, 0)
 
+    def test_cache_with_signal_but_no_papers_preview_is_ignored(self):
+        fetcher = _DummyFetcher()
+        analyzer = _DummyAnalyzer()
+
+        def cache_get(_scholar_id, _max_age_days, name=None):  # noqa: ARG001
+            return {
+                "researcher": {"name": "Cached", "total_citations": 10, "h_index": 3},
+                "publication_stats": {},
+                "papers_preview": [],
+            }
+
+        deps = ScholarPipelineDeps(
+            data_fetcher=fetcher,
+            analyzer=analyzer,
+            use_cache=True,
+            cache_max_age_days=3,
+            cache_get=cache_get,
+            # No cache_validate here: simulate page0/full fast-path behavior.
+            cache_validate=None,
+        )
+
+        report = run_scholar_pipeline(
+            deps=deps,
+            scholar_id="sid123",
+            researcher_name="Alice",
+            user_id="u1",
+        )
+
+        self.assertIsInstance(report, dict)
+        self.assertEqual(len(fetcher.profile_calls), 1, "expected pipeline to refresh instead of serving incomplete cache")
+        self.assertEqual(analyzer.analyze_pub_calls, 1)
+
     def test_persist_calls_cache_save(self):
         fetcher = _DummyFetcher()
         analyzer = _DummyAnalyzer()

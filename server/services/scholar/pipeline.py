@@ -148,6 +148,58 @@ def _try_load_cache(ctx: ScholarPipelineContext, deps: ScholarPipelineDeps, stat
     if not cached:
         return False
 
+    # Fast sanity check: avoid serving legacy/partial cached payloads that are known to break
+    # the frontend contract (e.g. missing papers due to older schema differences).
+    #
+    # NOTE: We intentionally keep this cheap. Full cache validation is only enabled when the
+    # caller explicitly opts into enrich (cache_validate not None).
+    def _cache_looks_usable(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        researcher = payload.get("researcher") if isinstance(payload.get("researcher"), dict) else {}
+        pub_stats = payload.get("publication_stats") if isinstance(payload.get("publication_stats"), dict) else {}
+
+        def _int(v: Any) -> int:
+            try:
+                if v is None or isinstance(v, bool):
+                    return 0
+                if isinstance(v, (int, float)):
+                    return int(v)
+                s = str(v).strip().lower().replace(",", "")
+                if not s:
+                    return 0
+                if s.endswith("k"):
+                    return int(float(s[:-1]) * 1000)
+                return int(float(s))
+            except Exception:
+                return 0
+
+        preview_max = max(0, min(_read_int_env("DINQ_SCHOLAR_PREVIEW_MAX_PAPERS", 30), 200))
+        total_citations = _int(researcher.get("total_citations"))
+        citations_5y = _int(researcher.get("citations_5y"))
+        h_index = _int(researcher.get("h_index"))
+        has_signal = (total_citations > 0) or (citations_5y > 0) or (h_index > 0)
+
+        # If the profile clearly has signal but the cached payload has no papers preview, it is very likely
+        # a schema-mismatch cache (papers were missing at fetch time). Force a refresh.
+        papers_preview = payload.get("papers_preview")
+        if has_signal and preview_max > 0:
+            if not isinstance(papers_preview, list) or len(papers_preview) == 0:
+                return False
+
+        total_papers = pub_stats.get("total_papers")
+        if has_signal and total_papers is not None and _int(total_papers) <= 0:
+            return False
+
+        papers_loaded = pub_stats.get("papers_loaded")
+        if has_signal and papers_loaded is not None and _int(papers_loaded) <= 0:
+            return False
+
+        return True
+
+    if deps.cache_validate is None and not _cache_looks_usable(cached):
+        return False
+
     ctx.status("Validating cached data...", progress=20.0)
     raise_if_cancelled(ctx.cancel_event)
 
