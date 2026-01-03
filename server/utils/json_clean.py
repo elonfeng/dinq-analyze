@@ -26,6 +26,9 @@ def prune_empty(value: Any) -> Any:
         return s or None
 
     if isinstance(value, dict):
+        meta = value.get("_meta") if isinstance(value.get("_meta"), dict) else None
+        if isinstance(meta, dict) and meta.get("preserve_empty") is True:
+            return value
         out: dict[str, Any] = {}
         for k, v in value.items():
             ks = str(k).strip()

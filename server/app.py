@@ -124,6 +124,12 @@ from server.api.author_api import author_bp
 
 # Unified analysis API
 from server.analyze.api import analyze_bp
+from server.tasks.leader_lock import (
+    is_leader,
+    leader_name_for_backup_replicator,
+    leader_name_for_cache_eviction,
+    leader_name_for_scheduler,
+)
 # Create Flask application
 app = Flask(__name__)
 
@@ -161,19 +167,34 @@ app.register_blueprint(analyze_bp)
 # Configure Sentry handler with initialization status
 configure_sentry_handler(sentry_initialized)
 
+# Single-machine multi-process guard:
+# Under gunicorn, only ONE worker should start background loops that write to SQLite or execute cards.
+try:
+    if is_leader(leader_name_for_scheduler()):
+        try:
+            from server.analyze.api import init_scheduler
+
+            init_scheduler()
+        except Exception:
+            pass
+except Exception:
+    pass
+
 # Local-first analysis: replicate cache artifacts to remote backup DB asynchronously (best-effort).
 try:
-    from server.tasks.backup_replicator import start_backup_replicator
+    if is_leader(leader_name_for_backup_replicator()):
+        from server.tasks.backup_replicator import start_backup_replicator
 
-    start_backup_replicator()
+        start_backup_replicator()
 except Exception:
     pass
 
 # Local-first analysis: keep local SQLite cache bounded (best-effort).
 try:
-    from server.tasks.local_cache_eviction import start_local_cache_evictor
+    if is_leader(leader_name_for_cache_eviction()):
+        from server.tasks.local_cache_eviction import start_local_cache_evictor
 
-    start_local_cache_evictor()
+        start_local_cache_evictor()
 except Exception:
     pass
 

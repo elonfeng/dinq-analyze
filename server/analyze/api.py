@@ -39,6 +39,7 @@ from server.analyze import rules
 from server.utils.json_clean import prune_empty
 from server.utils.sqlite_cache import get_sqlite_cache
 from server.utils.stream_protocol import create_event, format_stream_message
+from server.tasks.leader_lock import is_leader, leader_name_for_scheduler
 from src.utils.db_utils import get_db_session
 from src.models.db import AnalysisJob, AnalysisJobCard, AnalysisJobEvent
 
@@ -319,7 +320,12 @@ def _build_cards_from_final_cache_payload(
             data=raw,
             ctx=GateContext(source=src, card_type=ct_str, full_report=None),
         )
-        cleaned = prune_empty(decision.normalized)
+        preserve = False
+        if isinstance(decision.normalized, dict):
+            meta = decision.normalized.get("_meta")
+            if isinstance(meta, dict) and meta.get("preserve_empty") is True:
+                preserve = True
+        cleaned = None if preserve else prune_empty(decision.normalized)
         out[ct_str] = {"data": cleaned if cleaned is not None else decision.normalized, "stream": {}}
     return out
 
@@ -467,13 +473,6 @@ def _is_usable_final_cache_hit(
         if decision.action != "accept":
             return False
 
-        # Extra safety: GitHub role_model must not be the analyzed user.
-        if src == "github" and ct_str == "role_model" and isinstance(subject_key, str) and subject_key.startswith("login:"):
-            login = subject_key[len("login:") :].strip().lower()
-            rm = decision.normalized if isinstance(decision.normalized, dict) else {}
-            rm_login = _extract_login_from_github(rm.get("github")).lower()
-            if login and rm_login and rm_login == login:
-                return False
     return True
 
 
@@ -530,8 +529,15 @@ def _try_get_l1_cached_final_result(
 def init_scheduler(max_workers: Optional[int] = None) -> None:
     global _scheduler
     if _scheduler is None:
+        # Single-machine multi-process guard (gunicorn): only the leader should run the scheduler loop.
+        try:
+            if not is_leader(leader_name_for_scheduler()):
+                return
+        except Exception:
+            # If leader check fails for any reason, fall back to starting the scheduler (safer than stuck jobs).
+            pass
         if max_workers is None:
-            max_workers = _read_int_env("DINQ_ANALYZE_SCHEDULER_MAX_WORKERS", 4)
+            max_workers = _read_int_env("DINQ_ANALYZE_SCHEDULER_MAX_WORKERS", 8)
         max_workers = max(1, min(int(max_workers), 32))
         _scheduler = CardScheduler(
             job_store=_job_store,

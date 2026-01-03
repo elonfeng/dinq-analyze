@@ -21,7 +21,7 @@ _APIFY_LINKEDIN_FULL_ACTOR_ID = "2SyF0bVxmgGr8IVCZ"  # dev_fusion/Linkedin-Profi
 _APIFY_LINKEDIN_LITE_ACTOR_ID = "VhxlqQXRwhW8H5hNV"  # apimaestro/linkedin-profile-detail
 
 # Timeouts for scraping. Keep constants to avoid env sprawl; adjust in code if needed.
-_APIFY_LINKEDIN_LITE_PREFILL_TIMEOUT_S = 7.0  # How long we wait for a lite dataset item before aborting.
+_APIFY_LINKEDIN_LITE_PREFILL_TIMEOUT_S = 15.0  # How long we wait for a lite dataset item before aborting.
 _APIFY_LINKEDIN_FULL_TIMEOUT_S = 90.0  # Global guard for the full scrape.
 
 
@@ -63,7 +63,7 @@ def _canonicalize_linkedin_url(url: str) -> str:
 
 def _infer_name_from_linkedin_url(url: str) -> str:
     cleaned = _canonicalize_linkedin_url(url)
-    m = re.search(r"linkedin\\.com/(?:in|company)/([^/?#]+)", cleaned, flags=re.IGNORECASE)
+    m = re.search(r"linkedin\.com/(?:in|company)/([^/?#]+)", cleaned, flags=re.IGNORECASE)
     if not m:
         return ""
     slug = (m.group(1) or "").strip()
@@ -947,7 +947,8 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         "You are an expert LinkedIn profile analyst.\n"
         "Return ONLY valid JSON. Do not wrap in markdown.\n"
         "All text must be in English.\n"
-        "Never output 'No data' placeholders. If data is missing, infer a reasonable answer.\n"
+        "Do not invent facts. If a field cannot be derived from the provided profile, return an empty string, null, or an empty list.\n"
+        "Do not output placeholder phrases like 'No data', 'Not available', or 'Unavailable'.\n"
     )
 
     user = json.dumps(
@@ -966,7 +967,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                 ),
                 "colleagues_view": "Return 3-5 items per list; avoid placeholders; keep each bullet concise.",
                 "life_well_being": "Highly personalized to role/industry/location; provide exactly 3 actions per section; avoid generic platitudes.",
-                "about": "If profile.about is empty, generate a 40-60 word first-person about section.",
+                "about": "If profile.about is empty, return an empty string (do not invent).",
                 "tags": "Return 4-6 personal_tags (Title Case).",
             },
             "output_schema": {
@@ -988,7 +989,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                 "work_experience_summary": "string",
                 "education_summary": "string",
                 "money": {
-                    "years_of_experience": {"years": 0, "start_year": 0, "calculation_basis": "string"},
+                    "years_of_experience": {"years": None, "start_year": None, "calculation_basis": "string"},
                     "level_us": "string",
                     "level_cn": "string",
                     "estimated_salary": "string",
@@ -1006,9 +1007,9 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     )
 
     try:
-        timeout_s = float(os.getenv("DINQ_LINKEDIN_ENRICH_TIMEOUT_SECONDS", "40") or "40")
+        timeout_s = float(os.getenv("DINQ_LINKEDIN_ENRICH_TIMEOUT_SECONDS", "60") or "60")
     except Exception:
-        timeout_s = 40.0
+        timeout_s = 60.0
     timeout_s = max(5.0, min(float(timeout_s), 120.0))
 
     emit("ai_bundle", "Generating fused LinkedIn enrich bundle...", {"timeout_seconds": timeout_s})
@@ -1063,23 +1064,52 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     life_well_being = payload.get("life_well_being") if isinstance(payload.get("life_well_being"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
 
-    # Ensure required non-empty about for quality gate.
-    about = str(summary.get("about") or raw_profile.get("about") or "").strip()
+    def _is_placeholder_text(value: Any) -> bool:
+        s = str(value or "").strip()
+        if not s:
+            return True
+        lowered = s.lower()
+        if lowered in ("n/a", "na", "none", "unknown"):
+            return True
+        if "not available" in lowered or "unavailable" in lowered:
+            return True
+        if lowered.startswith("no ") and (" available" in lowered or lowered.endswith(" available")):
+            return True
+        if lowered.startswith("no ") and lowered.endswith(" found"):
+            return True
+        return False
+
+    # Summary: prefer model output; fall back to scraped about if present; otherwise declare unavailable.
+    about = str(summary.get("about") or "").strip()
+    if _is_placeholder_text(about):
+        about = ""
     if not about:
-        about = f"I am a {str(compact.get('headline') or 'professional').strip() or 'professional'} focused on delivering impact through my work."
-    personal_tags = summary.get("personal_tags") if isinstance(summary.get("personal_tags"), list) else []
+        about = str(raw_profile.get("about") or "").strip()
+        if _is_placeholder_text(about):
+            about = ""
 
-    # Deterministic money fallback if model output is empty/invalid.
-    if not money:
-        try:
-            from server.linkedin_analyzer.money_service import create_default_money_analysis
+    personal_tags_raw = summary.get("personal_tags") if isinstance(summary.get("personal_tags"), list) else []
+    personal_tags: list[str] = []
+    seen_tags: set[str] = set()
+    for t in personal_tags_raw:
+        s = str(t or "").strip()
+        if not s or _is_placeholder_text(s):
+            continue
+        key = s.lower()
+        if key in seen_tags:
+            continue
+        seen_tags.add(key)
+        personal_tags.append(s[:48])
+        if len(personal_tags) >= 8:
+            break
 
-            money = create_default_money_analysis(raw_profile, person_name)
-        except Exception:
-            money = {}
+    summary_meta: Dict[str, Any] = {}
+    if not about:
+        summary_meta = {"fallback": True, "code": "unavailable", "preserve_empty": True, "missing": ["about"]}
 
     def _normalize_money(m: Any) -> Dict[str, Any]:
         payload = m if isinstance(m, dict) else {}
+        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else None
 
         years = payload.get("years_of_experience")
         if not isinstance(years, dict):
@@ -1156,13 +1186,16 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                     salary_s = f"{lo}-{hi}"
         expl_s = str(explanation or "").strip()
 
-        return {
+        out = {
             "years_of_experience": years,
             "level_us": lvl_us_s or None,
             "level_cn": lvl_cn_s or None,
             "estimated_salary": salary_s,
             "explanation": expl_s,
         }
+        if isinstance(meta, dict) and meta:
+            out["_meta"] = dict(meta)
+        return out
 
     money = _normalize_money(money)
 
@@ -1179,12 +1212,19 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         return True
 
     if not _money_valid(money):
-        try:
-            from server.linkedin_analyzer.money_service import create_default_money_analysis
-
-            money = _normalize_money(create_default_money_analysis(raw_profile, person_name))
-        except Exception:
-            pass
+        missing: list[str] = []
+        if not str(money.get("level_us") or "").strip():
+            missing.append("level_us")
+        if not str(money.get("level_cn") or "").strip():
+            missing.append("level_cn")
+        if not str(money.get("estimated_salary") or "").strip():
+            missing.append("estimated_salary")
+        meta = money.get("_meta") if isinstance(money.get("_meta"), dict) else {}
+        meta = dict(meta) if isinstance(meta, dict) else {}
+        meta.update({"fallback": True, "code": "unavailable", "preserve_empty": True})
+        if missing:
+            meta["missing"] = missing
+        money["_meta"] = meta
 
     def _clean_str_list(value: Any, *, limit: int) -> list[str]:
         if not isinstance(value, list):
@@ -1222,20 +1262,21 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                 break
         return out
 
-    # Ensure these legacy sections always exist and have non-empty content for UI rendering.
+    # Normalize colleagues_view. Do not fabricate defaults.
     if not isinstance(colleagues_view, dict):
         colleagues_view = {}
     highlights = _clean_str_list(colleagues_view.get("highlights"), limit=6)
     improvements = _clean_str_list(colleagues_view.get("areas_for_improvement"), limit=6)
+    highlights = [h for h in highlights if not _is_placeholder_text(h)]
+    improvements = [h for h in improvements if not _is_placeholder_text(h)]
+    colleagues_view = {"highlights": highlights, "areas_for_improvement": improvements}
     if not highlights or not improvements:
-        try:
-            from server.linkedin_analyzer.colleagues_view_service import create_default_colleagues_view
-
-            colleagues_view = create_default_colleagues_view(raw_profile, person_name)
-        except Exception:
-            colleagues_view = {"highlights": highlights, "areas_for_improvement": improvements}
-    else:
-        colleagues_view = {"highlights": highlights, "areas_for_improvement": improvements}
+        colleagues_view["_meta"] = {
+            "fallback": True,
+            "code": "unavailable",
+            "preserve_empty": True,
+            "missing": [k for k, v in (("highlights", highlights), ("areas_for_improvement", improvements)) if not v],
+        }
 
     if not isinstance(life_well_being, dict):
         life_well_being = {}
@@ -1245,25 +1286,80 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     h_advice = str(health.get("advice") or "").strip()
     ls_actions = _normalize_actions(ls.get("actions"))
     h_actions = _normalize_actions(health.get("actions"))
-    if not ls_advice or not h_advice or len(ls_actions) < 3 or len(h_actions) < 3:
-        try:
-            from server.linkedin_analyzer.life_well_being_service import create_default_life_well_being
+    if _is_placeholder_text(ls_advice):
+        ls_advice = ""
+    if _is_placeholder_text(h_advice):
+        h_advice = ""
 
-            life_well_being = create_default_life_well_being(raw_profile, person_name)
-        except Exception:
-            life_well_being = {
-                "life_suggestion": {"advice": ls_advice, "actions": ls_actions},
-                "health": {"advice": h_advice, "actions": h_actions},
-            }
-    else:
-        life_well_being = {
-            "life_suggestion": {"advice": ls_advice, "actions": ls_actions},
-            "health": {"advice": h_advice, "actions": h_actions},
+    def _dedup_actions(items: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+        for a in items:
+            phrase = str(a.get("phrase") or "").strip()
+            if not phrase:
+                continue
+            key = phrase.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(a)
+            if len(out) >= 3:
+                break
+        return out
+
+    ls_actions = _dedup_actions(ls_actions)
+    h_actions = _dedup_actions(h_actions)
+    life_well_being = {
+        "life_suggestion": {"advice": ls_advice, "actions": ls_actions},
+        "health": {"advice": h_advice, "actions": h_actions},
+    }
+    if not (ls_advice or ls_actions) or not (h_advice or h_actions):
+        life_well_being["_meta"] = {
+            "fallback": True,
+            "code": "unavailable",
+            "preserve_empty": True,
+            "missing": [
+                k
+                for k, ok in (
+                    ("life_suggestion", bool(ls_advice or ls_actions)),
+                    ("health", bool(h_advice or h_actions)),
+                )
+                if not ok
+            ],
         }
 
-    # Best-effort: if model fails to produce any skills lists, provide a minimal placeholder list
-    # so the card completes (quality gate accepts fallback meta if needed downstream).
-    if not any(isinstance(v, list) and v for v in skills.values()):
+    # Normalize skills. If the model fails, derive from scraped skills/languages only (no invented defaults).
+    if not isinstance(skills, dict):
+        skills = {}
+
+    def _norm_list(value: Any, *, limit: int) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            s = str(item or "").strip()
+            if not s or _is_placeholder_text(s):
+                continue
+            key = s.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s[:80])
+            if len(out) >= int(limit):
+                break
+        return out
+
+    skills_meta = skills.get("_meta") if isinstance(skills.get("_meta"), dict) else None
+    skills = {
+        "industry_knowledge": _norm_list(skills.get("industry_knowledge"), limit=8),
+        "tools_technologies": _norm_list(skills.get("tools_technologies"), limit=8),
+        "interpersonal_skills": _norm_list(skills.get("interpersonal_skills"), limit=8),
+        "language": _norm_list(skills.get("language"), limit=8),
+        **({"_meta": dict(skills_meta)} if isinstance(skills_meta, dict) and skills_meta else {}),
+    }
+
+    if not any(isinstance(v, list) and v for k, v in skills.items() if k != "_meta"):
         raw_skills = compact.get("skills") if isinstance(compact.get("skills"), list) else []
         raw_langs = compact.get("languages") if isinstance(compact.get("languages"), list) else []
 
@@ -1318,33 +1414,17 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
             else:
                 industry.append(s)
 
-        headline = str(compact.get("headline") or "").strip()
-        company_industry = str(compact.get("companyIndustry") or "").strip()
-        if headline:
-            industry = _dedup([headline] + industry, limit=10)
-        if company_industry:
-            industry = _dedup([company_industry] + industry, limit=10)
+        languages = _dedup(raw_langs, limit=8)
 
-        if not tools:
-            tools = ["Microsoft Excel", "PowerPoint", "Google Workspace"]
-        if not industry:
-            industry = ["Domain Expertise", "Strategy", "Market Analysis"]
-
-        interpersonal = [
-            "Leadership" if any(x in headline.lower() for x in ("director", "head", "manager", "lead", "vp")) else "Team Collaboration",
-            "Stakeholder Management",
-            "Communication",
-            "Problem Solving",
-        ]
-
-        languages = _dedup(raw_langs, limit=6) or ["English"]
-
-        skills = {
-            "industry_knowledge": _dedup(industry, limit=6),
-            "tools_technologies": _dedup(tools, limit=6),
-            "interpersonal_skills": _dedup(interpersonal, limit=6),
+        derived = {
+            "industry_knowledge": _dedup(industry, limit=8),
+            "tools_technologies": _dedup(tools, limit=8),
+            "interpersonal_skills": [],
             "language": languages,
         }
+        if not any(derived.values()):
+            derived["_meta"] = {"fallback": True, "code": "unavailable", "preserve_empty": True}
+        skills = derived
 
     # Ensure summaries are non-empty strings.
     work_summary = str(payload.get("work_experience_summary") or "").strip()
@@ -1363,10 +1443,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
             elif company:
                 picks.append(company)
         if picks:
-            joined = ", ".join(picks[:2]) + (f", and {picks[2]}" if len(picks) >= 3 else "")
-            work_summary = f"Career includes roles such as {joined}. Demonstrates steady progression and impact through strategic ownership, domain expertise, and cross-functional collaboration."
-        else:
-            work_summary = "Experienced professional with a track record across multiple roles and organizations."
+            work_summary = "Roles: " + "; ".join(picks[:3]) + "."
     edu_summary = str(payload.get("education_summary") or "").strip()
     if not edu_summary:
         edus = compact.get("educations") if isinstance(compact.get("educations"), list) else []
@@ -1388,9 +1465,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
             elif school:
                 picks.append(school)
         if picks:
-            edu_summary = f"Education background includes {', '.join(picks)}. This foundation supports continued growth through applied learning and real-world execution."
-        else:
-            edu_summary = "Education background supports a strong foundation for continued professional growth."
+            edu_summary = "Education: " + "; ".join(picks[:2]) + "."
 
     if not personal_tags:
         pools: list[str] = []
@@ -1398,7 +1473,20 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
             v = skills.get(k) if isinstance(skills, dict) else None
             if isinstance(v, list):
                 pools.extend(v)
-        personal_tags = pools[:6]
+        seen = set()
+        dedup: list[str] = []
+        for x in pools:
+            s = str(x or "").strip()
+            if not s:
+                continue
+            key = s.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(s[:48])
+            if len(dedup) >= 8:
+                break
+        personal_tags = dedup[:6]
 
     return {
         "skills": skills,
@@ -1409,6 +1497,6 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         "money_analysis": money,
         "colleagues_view": colleagues_view,
         "life_well_being": life_well_being,
-        "summary": {"about": about, "personal_tags": personal_tags},
+        "summary": {"about": about, "personal_tags": personal_tags, **({"_meta": summary_meta} if summary_meta else {})},
         "role_model": role_model,
     }

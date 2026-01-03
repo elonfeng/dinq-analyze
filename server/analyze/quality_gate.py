@@ -146,7 +146,7 @@ def fallback_card_output(
     err_text = str(error) if error else (last_decision.issue.message if last_decision and last_decision.issue else "")
 
     def _meta(code: str) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"fallback": True, "code": code}
+        out: Dict[str, Any] = {"fallback": True, "code": code, "preserve_empty": True}
         if err_text:
             out["error"] = err_text[:500]
         return out
@@ -177,9 +177,13 @@ def fallback_card_output(
             valuation = base.get("valuation_and_level")
             if not isinstance(valuation, dict):
                 valuation = {}
-            if not str(valuation.get("level") or "").strip():
-                valuation["level"] = "L4"
-                valuation["reasoning"] = valuation.get("reasoning") or "Fallback: unable to compute valuation accurately."
+            normalized_val = dict(valuation)
+            normalized_val.setdefault("level", "")
+            normalized_val.setdefault("salary_range", [None, None])
+            normalized_val.setdefault("industry_ranking", None)
+            normalized_val.setdefault("growth_potential", "")
+            normalized_val.setdefault("reasoning", "")
+
             desc = str(base.get("description") or "").strip()
             if not desc:
                 login = ""
@@ -188,7 +192,7 @@ def fallback_card_output(
                     if isinstance(user, dict):
                         login = str(user.get("login") or "").strip()
                 desc = f"GitHub profile summary{(' for ' + login) if login else ''}."
-            return merge_meta({"valuation_and_level": valuation, "description": desc}, _meta("fallback_summary"))
+            return merge_meta({"valuation_and_level": normalized_val, "description": desc}, _meta("fallback_summary"))
 
     if src == "scholar":
         if ct == "coauthors":
@@ -250,14 +254,12 @@ def fallback_card_output(
             return merge_meta(payload, _meta("fallback_role_model"))
         if ct == "money":
             payload = base if base else {}
-            est = payload.get("estimated_salary") or payload.get("earnings") or "800000-1200000"
-            expl = payload.get("explanation") or payload.get("justification") or "Salary estimate unavailable; please retry later."
             normalized = {
                 "years_of_experience": payload.get("years_of_experience") if isinstance(payload.get("years_of_experience"), dict) else {},
                 "level_us": payload.get("level_us"),
                 "level_cn": payload.get("level_cn"),
-                "estimated_salary": str(est or "").replace(",", "").replace("$", "").strip(),
-                "explanation": str(expl or "").strip(),
+                "estimated_salary": str(payload.get("estimated_salary") or "").replace(",", "").replace("$", "").strip(),
+                "explanation": str(payload.get("explanation") or "").strip(),
             }
             return merge_meta(normalized, _meta("fallback_money"))
         if ct == "roast":
@@ -524,17 +526,8 @@ def _github_repos(data: Any, ctx: GateContext) -> GateDecision:
 
 def _github_role_model(data: Any, ctx: GateContext) -> GateDecision:
     payload = _as_dict(data)
-    if not payload:
-        return GateDecision(action="retry", normalized=payload, issue=GateIssue(code="empty_role_model", message="Missing role model analysis", retryable=True))
-
     name = str(payload.get("name") or "").strip()
     github = str(payload.get("github") or "").strip()
-    if not name or not github:
-        return GateDecision(
-            action="retry",
-            normalized=payload,
-            issue=GateIssue(code="missing_role_model_fields", message="Missing role model name/github", retryable=True),
-        )
 
     def _extract_login(value: str) -> str:
         raw = str(value or "").strip()
@@ -549,7 +542,7 @@ def _github_role_model(data: Any, ctx: GateContext) -> GateDecision:
                     return tail.split("/", 1)[0].strip()
         return raw.strip().lstrip("@").split("/", 1)[0].strip()
 
-    # Never allow "self as role model" (some users exist in the pioneers dataset).
+    # Prefer non-self role models, but allow self as a last-resort fallback.
     user_login = ""
     user_url = ""
     art = ctx.artifacts.get("resource.github.data")
@@ -560,20 +553,24 @@ def _github_role_model(data: Any, ctx: GateContext) -> GateDecision:
 
     rm_login = _extract_login(github).lower()
     rm_url = str(github).strip().lower().rstrip("/")
-    if user_login and rm_login and rm_login == user_login:
-        return GateDecision(
-            action="retry",
-            normalized=payload,
-            issue=GateIssue(code="self_role_model", message="Role model must not be the analyzed user", retryable=True),
-        )
-    if user_url and rm_url and rm_url == user_url:
-        return GateDecision(
-            action="retry",
-            normalized=payload,
-            issue=GateIssue(code="self_role_model", message="Role model must not be the analyzed user", retryable=True),
-        )
+    is_self = bool(user_login and rm_login and rm_login == user_login) or bool(user_url and rm_url and rm_url == user_url)
 
-    return GateDecision(action="accept", normalized=payload)
+    missing: list[str] = []
+    if not name:
+        missing.append("name")
+    if not github:
+        missing.append("github")
+    if is_self:
+        missing.append("self_role_model")
+
+    normalized = dict(payload)
+    if "name" not in normalized:
+        normalized["name"] = name
+    if "github" not in normalized:
+        normalized["github"] = github
+    if missing:
+        normalized["_meta"] = {"fallback": True, "code": "unavailable", "preserve_empty": True, "missing": missing}
+    return GateDecision(action="accept", normalized=normalized)
 
 
 def _github_roast(data: Any, ctx: GateContext) -> GateDecision:
@@ -709,26 +706,6 @@ def _linkedin_money(data: Any, ctx: GateContext) -> GateDecision:
 
     expl = str(expl_raw or "").strip()
 
-    # If still missing, derive a deterministic range from level_us so FE always has content.
-    if not est:
-        lvl = (level_us or "L5").upper().replace(" ", "")
-        base_ranges = {
-            "L3": (180_000, 250_000),
-            "L4": (280_000, 380_000),
-            "L5": (400_000, 550_000),
-            "L6": (600_000, 850_000),
-            "L7": (900_000, 1_300_000),
-            "L8": (1_400_000, 2_200_000),
-            "L9": (2_500_000, 4_000_000),
-        }
-        lo, hi = base_ranges.get(lvl, base_ranges["L5"])
-        est = f"{int(lo)}-{int(hi)}"
-        if not expl:
-            expl = f"Estimated based on career level ({lvl}) and typical market compensation benchmarks."
-
-    if not expl:
-        expl = "Estimated based on profile seniority and market benchmarks."
-
     normalized = {
         "years_of_experience": years,
         "level_us": level_us,
@@ -736,6 +713,17 @@ def _linkedin_money(data: Any, ctx: GateContext) -> GateDecision:
         "estimated_salary": est,
         "explanation": expl,
     }
+    missing: list[str] = []
+    if not str(level_us or "").strip():
+        missing.append("level_us")
+    if not str(level_cn or "").strip():
+        missing.append("level_cn")
+    if not str(est or "").strip():
+        missing.append("estimated_salary")
+    if not str(expl or "").strip():
+        missing.append("explanation")
+    if missing:
+        normalized["_meta"] = {"fallback": True, "code": "unavailable", "preserve_empty": True, "missing": missing}
     return GateDecision(action="accept", normalized=normalized)
 
 

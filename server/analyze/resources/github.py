@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -854,8 +853,8 @@ def fetch_github_data(
                 "active_days": active_days,
             }
 
-            # Keep legacy key: randomized description for summary card fallback.
-            output["description"] = f"GitHub profile summary for {login}." if random.random() < 0.9 else f"Developer profile for {login}."
+            # Keep legacy key (deterministic; no random output).
+            output["description"] = f"GitHub profile summary for {login}."
             return output
         finally:
             await github.close()
@@ -1027,7 +1026,7 @@ def run_github_enrich_bundle(
 
     try:
         if fast_mode:
-            raw = os.getenv("DINQ_GITHUB_ENRICH_FAST_TIMEOUT_SECONDS") or os.getenv("DINQ_GITHUB_ENRICH_TIMEOUT_SECONDS") or "10"
+            raw = os.getenv("DINQ_GITHUB_ENRICH_FAST_TIMEOUT_SECONDS") or os.getenv("DINQ_GITHUB_ENRICH_TIMEOUT_SECONDS") or "15"
             timeout_seconds = float(raw)
         else:
             timeout_seconds = float(os.getenv("DINQ_GITHUB_ENRICH_BACKGROUND_TIMEOUT_SECONDS", "60") or "60")
@@ -1148,42 +1147,54 @@ def run_github_enrich_bundle(
     user_url_l = str(user.get("url") or f"https://github.com/{user_login_l}").strip().lower().rstrip("/")
 
     # Valuation (upstream schema): level + numeric salary_range + industry_ranking + growth_potential + reasoning.
+    # IMPORTANT: do not fabricate level/salary defaults; mark unavailable when missing.
     valuation = results.get("valuation") if isinstance(results.get("valuation"), dict) else {}
+    v_meta = valuation.get("_meta") if isinstance(valuation.get("_meta"), dict) else {}
+
     level = _coerce_level(valuation.get("level"))
     if level:
         valuation["level"] = level
     else:
-        valuation["level"] = _coerce_level((valuation or {}).get("level")) or "L4"
+        valuation["level"] = ""
 
     salary_range = valuation.get("salary_range")
-    if not (isinstance(salary_range, list) and len(salary_range) == 2):
-        # Hard fallback: keep UI contract stable even if LLM fails.
-        base_comp = {
-            "L3": 194_000,
-            "L4": 287_000,
-            "L5": 377_000,
-            "L6": 562_000,
-            "L7": 779_000,
-            "L8": 1_111_000,
-        }.get(str(valuation.get("level") or "L4"), 287_000)
-        valuation["salary_range"] = [int(base_comp * 0.9), int(base_comp * 1.1)]
+    normalized_salary: list[Optional[int]] = [None, None]
+    if isinstance(salary_range, list) and len(salary_range) == 2:
+        try:
+            a = int(salary_range[0]) if salary_range[0] is not None and not isinstance(salary_range[0], bool) else None
+        except Exception:
+            a = None
+        try:
+            b = int(salary_range[1]) if salary_range[1] is not None and not isinstance(salary_range[1], bool) else None
+        except Exception:
+            b = None
+        normalized_salary = [a, b]
+    valuation["salary_range"] = normalized_salary
 
     industry_ranking = _coerce_industry_ranking(valuation.get("industry_ranking"))
-    if industry_ranking is None:
-        if str(valuation.get("level") or "") in ("L6", "L7", "L8"):
-            industry_ranking = 0.25
-        elif str(valuation.get("level") or "") == "L5":
-            industry_ranking = 0.35
-        else:
-            industry_ranking = 0.5
     valuation["industry_ranking"] = industry_ranking
 
     growth = str(valuation.get("growth_potential") or "").strip()
-    if not growth:
-        growth = "Medium"
     valuation["growth_potential"] = growth
+
+    reasoning = str(valuation.get("reasoning") or "").strip()
+    valuation["reasoning"] = reasoning
+
+    missing: list[str] = []
+    if not str(valuation.get("level") or "").strip():
+        missing.append("level")
+    if not (isinstance(valuation.get("salary_range"), list) and len(valuation.get("salary_range")) == 2 and any(v is not None for v in valuation.get("salary_range"))):
+        missing.append("salary_range")
+    if valuation.get("industry_ranking") is None:
+        missing.append("industry_ranking")
+    if not str(valuation.get("growth_potential") or "").strip():
+        missing.append("growth_potential")
     if not str(valuation.get("reasoning") or "").strip():
-        valuation["reasoning"] = "Fallback estimate based on GitHub tenure + contribution signals."
+        missing.append("reasoning")
+    if missing:
+        meta_out = dict(v_meta) if isinstance(v_meta, dict) else {}
+        meta_out.update({"fallback": True, "code": "unavailable", "preserve_empty": True, "missing": missing})
+        valuation["_meta"] = meta_out
 
     # Role model: prefer LLM output; fallback to a deterministic best-match from dev_pioneers_data (never self).
     role_model = results.get("role_model") if isinstance(results.get("role_model"), dict) else {}
@@ -1251,11 +1262,12 @@ def run_github_enrich_bundle(
             }
         else:
             role_model = {
-                "name": "Role model",
-                "github": "",
-                "similarity_score": 0.0,
-                "reason": "Role model unavailable (no pioneers dataset).",
+                "name": str(user.get("name") or user_login or login).strip() or login,
+                "github": f"https://github.com/{user_login_l}" if user_login_l else f"https://github.com/{str(login or '').strip()}",
+                "similarity_score": 1.0,
+                "reason": "Role model unavailable (no pioneers dataset); using self as fallback.",
                 "achievement": "",
+                "_meta": {"fallback": True, "code": "unavailable", "preserve_empty": True, "missing": ["pioneers_dataset"]},
             }
 
     # Roast

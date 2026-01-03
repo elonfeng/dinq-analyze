@@ -160,11 +160,11 @@ class CardScheduler:
 
         limits: Dict[str, int] = {
             "default": int(self._max_workers),
-            # Speed-first default: keep LLM parallelism equal to runner workers.
-            "llm": int(self._max_workers),
+            # Balance: keep LLM parallelism capped by default to reduce rate-limit/cost spikes.
+            "llm": int(min(4, self._max_workers)) if int(self._max_workers) > 0 else 1,
             "github_api": int(self._max_workers),
             "crawlbase": int(min(2, self._max_workers)),
-            "apify": 1,
+            "apify": int(min(2, self._max_workers)) if int(self._max_workers) > 0 else 1,
         }
 
         raw = (os.getenv("DINQ_ANALYZE_CONCURRENCY_GROUP_LIMITS") or "").strip()
@@ -248,13 +248,23 @@ class CardScheduler:
                 pass
             return {"data": {}, "stream": {}}
 
-        # Final output hygiene: remove null/empty fields so the frontend never sees blank placeholders.
-        # If pruning would drop the entire payload (unexpected), keep the original output to avoid
-        # turning a usable card into `{}`.
+        # Final output hygiene: prune empty fields by default, but preserve schema when the payload
+        # explicitly requests it (e.g. unavailable/fallback payloads).
         try:
-            cleaned = prune_empty(output)
-            if cleaned is not None:
-                output = cleaned
+            preserve = False
+            if isinstance(output, dict):
+                meta = output.get("_meta")
+                if isinstance(meta, dict) and meta.get("preserve_empty") is True:
+                    preserve = True
+                # Envelope case: {"data": {...}, "stream": {...}}
+                if not preserve and "data" in output and isinstance(output.get("data"), dict):
+                    meta2 = output.get("data", {}).get("_meta")
+                    if isinstance(meta2, dict) and meta2.get("preserve_empty") is True:
+                        preserve = True
+            if not preserve:
+                cleaned = prune_empty(output)
+                if cleaned is not None:
+                    output = cleaned
         except Exception:
             pass
 

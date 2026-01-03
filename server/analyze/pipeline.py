@@ -942,9 +942,12 @@ class PipelineExecutor:
                     data = merged
 
                 try:
-                    cleaned = prune_empty(data)
-                    if cleaned is not None:
-                        data = cleaned
+                    meta = data.get("_meta") if isinstance(data, dict) else None
+                    preserve = isinstance(meta, dict) and meta.get("preserve_empty") is True
+                    if not preserve:
+                        cleaned = prune_empty(data)
+                        if cleaned is not None:
+                            data = cleaned
                 except Exception:
                     pass
 
@@ -1745,10 +1748,10 @@ class PipelineExecutor:
 
                         summary_payload = enrich.get("summary") if isinstance(enrich.get("summary"), dict) else {}
                         about = summary_payload.get("about")
-                        if about is not None:
+                        if isinstance(about, str) and about.strip():
                             merged_profile["about"] = about
                         tags = summary_payload.get("personal_tags")
-                        if tags is not None:
+                        if isinstance(tags, list) and tags:
                             merged_profile["personal_tags"] = tags
 
                         raw_report["profile_data"] = merged_profile
@@ -1764,12 +1767,16 @@ class PipelineExecutor:
                         tools = payload.get("tools_technologies") or []
                         interpersonal = payload.get("interpersonal_skills") or []
                         languages = payload.get("language") or []
-                        return {
+                        out = {
                             "industry_knowledge": industry,
                             "tools_technologies": tools,
                             "interpersonal_skills": interpersonal,
                             "language": languages,
                         }
+                        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else None
+                        if isinstance(meta, dict) and meta:
+                            out["_meta"] = meta
+                        return out
 
                     if ct == "career":
                         career = enrich.get("career") if isinstance(enrich.get("career"), dict) else {}
@@ -1777,19 +1784,6 @@ class PipelineExecutor:
                         educations = profile_data.get("education") or raw_profile.get("educations") or []
                         work_summary = str(enrich.get("work_experience_summary") or "").strip()
                         edu_summary = str(enrich.get("education_summary") or "").strip()
-                        if not career:
-                            headline = str(raw_profile.get("headline") or raw_profile.get("occupation") or "").strip()
-                            career = {
-                                "future_development_potential": (
-                                    f"{person_name} shows strong growth potential"
-                                    + (f" as a {headline}." if headline else ".")
-                                    + " Focus on deepening domain expertise and expanding leadership impact."
-                                ),
-                                "development_advice": {
-                                    "past_evaluation": "Track record indicates consistent delivery; continue to strengthen strategic ownership and cross-functional influence.",
-                                    "future_advice": "Prioritize high-leverage projects, build a clear specialization narrative, and invest in communication and mentoring to unlock the next level.",
-                                },
-                            }
                         return {
                             "career": career,
                             "work_experience": experiences,
@@ -1846,7 +1840,19 @@ class PipelineExecutor:
                                 # Title-case tokens for UI consistency.
                                 dedup.append(" ".join([p.capitalize() for p in x.split()]))
                             tags = dedup[:6]
-                        return {"about": about, "personal_tags": tags}
+                        out = {"about": about, "personal_tags": tags}
+                        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else None
+                        if isinstance(meta, dict) and meta:
+                            out["_meta"] = meta
+                        if not about:
+                            out["_meta"] = {
+                                **(out.get("_meta") if isinstance(out.get("_meta"), dict) else {}),
+                                "fallback": True,
+                                "code": "unavailable",
+                                "preserve_empty": True,
+                                "missing": ["about"],
+                            }
+                        return out
 
                     artifact = self._artifact_store.get_artifact(job.id, "full_report")
                     if artifact is not None and isinstance(artifact.payload, dict):
