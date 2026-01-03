@@ -11,6 +11,7 @@ Supports multiple models including:
 All models are accessed through OpenRouter's unified API, simplifying the integration.
 """
 
+import json
 import logging
 from server.llm.gateway import openrouter_chat
 from server.config.llm_models import get_model
@@ -146,6 +147,57 @@ def format_researcher_data_for_critique(researcher_data):
     return "\n".join(output)
 
 
+def _compact_roast_context(source_data):
+    """
+    Build a compact context payload for the roast prompt.
+
+    The previous markdown formatter can be very verbose and increases LLM latency.
+    For the roast (<=35 words), we only need a few high-signal metrics.
+    """
+
+    if not isinstance(source_data, dict):
+        return {}
+
+    researcher = source_data.get("researcher") if isinstance(source_data.get("researcher"), dict) else {}
+    pub_stats = source_data.get("publication_stats") if isinstance(source_data.get("publication_stats"), dict) else {}
+    coauthor_stats = source_data.get("coauthor_stats") if isinstance(source_data.get("coauthor_stats"), dict) else {}
+    most_cited = pub_stats.get("most_cited_paper") if isinstance(pub_stats.get("most_cited_paper"), dict) else {}
+
+    fields = researcher.get("research_fields") or []
+    if isinstance(fields, str):
+        fields = [fields]
+    if not isinstance(fields, list):
+        fields = []
+
+    conf_dist = pub_stats.get("conference_distribution") if isinstance(pub_stats.get("conference_distribution"), dict) else {}
+    top_venues = []
+    try:
+        top_venues = sorted([(str(k), int(v)) for k, v in conf_dist.items()], key=lambda x: x[1], reverse=True)[:6]
+    except Exception:
+        top_venues = []
+
+    return {
+        "name": researcher.get("name"),
+        "affiliation": researcher.get("affiliation"),
+        "fields": [str(x) for x in fields[:8] if str(x).strip()],
+        "metrics": {
+            "h_index": researcher.get("h_index"),
+            "total_citations": researcher.get("total_citations"),
+            "citations_5y": researcher.get("citations_5y"),
+            "total_papers": pub_stats.get("total_papers"),
+            "top_tier_papers": pub_stats.get("top_tier_papers") or pub_stats.get("top_tier_publications"),
+            "total_collaborators": coauthor_stats.get("total_coauthors"),
+        },
+        "most_cited_paper": {
+            "title": most_cited.get("title"),
+            "year": most_cited.get("year"),
+            "citations": most_cited.get("citations"),
+            "venue": most_cited.get("venue"),
+        },
+        "top_venues": top_venues,
+    }
+
+
 def generate_critical_evaluation(source_data, model=None):
     """
     Generate a critical evaluation of the researcher using LLM APIs.
@@ -158,31 +210,26 @@ def generate_critical_evaluation(source_data, model=None):
     Returns:
         str: A string containing the evaluation
     """
-    # Format the researcher data for the LLM
     try:
-        researcher_summary = format_researcher_data_for_critique(source_data)
+        # Keep the prompt compact for lower latency + better streaming UX.
+        ctx = _compact_roast_context(source_data)
 
         messages = [
             {
                 "role": "system",
-                "content": """You are a witty roaster who delivers playful, humorous burns about researchers. 
-                Your roast must be in fluent English and must not exceed 35 words.
-
-                Roast style guidelines:
-                1. Use exaggeration and irony to poke fun at their work/habits
-                2. Be cheeky but not mean-spirited or offensive
-                3. Reference common researcher stereotypes (no social life, obsessed with citations, etc.)
-                4. Keep it light-hearted and entertaining
-
-                IMPORTANT:
-                - Maximum 35 words
-                - Single paragraph, no bullet points
-                - Witty and sharp, but never cruel
-                - Focus on funny contradictions or quirks in their research profile""",
+                "content": (
+                    "You are a witty roaster who delivers playful, humorous burns about researchers.\n"
+                    "Write fluent English.\n\n"
+                    "STRICT OUTPUT RULES:\n"
+                    "- Maximum 35 words\n"
+                    "- Single paragraph (no bullets)\n"
+                    "- Cheeky, not cruel; no hate/offensive content\n"
+                    "- Use the provided context only; do not invent facts\n"
+                ),
             },
             {
                 "role": "user",
-                "content": f"Roast this researcher based on their profile (keep it funny and light!):\n\n{researcher_summary}",
+                "content": "Roast this researcher based on the following JSON context:\n\n" + json.dumps(ctx, ensure_ascii=False),
             }
         ]
 
@@ -205,7 +252,7 @@ def generate_critical_evaluation(source_data, model=None):
                 messages=messages,
                 model=openrouter_model,
                 temperature=0.7,
-                max_tokens=200,
+                max_tokens=120,
                 cache=False,
                 timeout_seconds=12.0,
             )
@@ -248,8 +295,8 @@ def generate_critical_evaluation(source_data, model=None):
             raise ValueError("empty_evaluation")
         except Exception as e:
             logger.error(f"Error in LLM API call: {e}")
-            return "Based on our analysis of the researcher's publication history and citation metrics, they demonstrate notable contributions to their field. Their work shows a balance of depth and breadth, with particular strength in their core research areas. While their citation impact is respectable, there are opportunities to expand their collaborative network and increase the interdisciplinary reach of their research. Their publication trajectory suggests continued growth and potential for increased influence in coming years."
+            return "No roast available."
     except Exception as e:
         logger.error(f"Error in generate_critical_evaluation: {e}")
-        return "After reviewing the researcher's academic profile, we observe a solid foundation of scholarly work with meaningful contributions to their field. Their publication record demonstrates commitment to their research domain, though there may be opportunities to enhance impact through strategic publication choices and expanded collaboration networks. Overall, their scholarly trajectory appears positive with potential for continued development and increased visibility in their research community."
+        return "No roast available."
  

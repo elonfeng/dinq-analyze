@@ -446,6 +446,17 @@ class _CardDeltaEmitter:
     def _append(self, text: str) -> None:
         if not text:
             return
+        # If upstream hands us a large chunk (common for pseudo-streaming), split it so the UI
+        # still receives smooth "typing" deltas at the configured flush granularity.
+        if len(text) >= (self._flush_chars * 2):
+            for i in range(0, len(text), self._flush_chars):
+                part = text[i : i + self._flush_chars]
+                if not part:
+                    continue
+                self._buffer.append(part)
+                self._size += len(part)
+                self.flush()
+            return
         self._buffer.append(text)
         self._size += len(text)
         if "\n\n" in text or self._size >= self._flush_chars:
@@ -1900,11 +1911,7 @@ class PipelineExecutor:
 
                 # Prefer "pseudo-streaming" (non-stream request + chunked deltas) for stability.
                 # Provider streaming can have large/unstable TTFB in production.
-                force_stream = False
-                # Scholar critical review benefits from true token streaming for "typing" UX.
-                if str(source or "").strip().lower() == "scholar" and str(card.card_type) == "criticalReview":
-                    force_stream = True
-                with llm_stream_context(delta_emitter.on_delta, force_stream=force_stream):
+                with llm_stream_context(delta_emitter.on_delta, force_stream=False):
                     return run()
             return run()
         finally:
