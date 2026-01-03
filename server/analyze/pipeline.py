@@ -44,6 +44,7 @@ from server.analyze.resources.scholar import (
     run_scholar_base,
     run_scholar_full,
     run_scholar_page0,
+    run_scholar_preview,
 )
 from server.analyze.card_specs import get_stream_spec
 from server.utils.json_clean import prune_empty
@@ -838,6 +839,10 @@ class PipelineExecutor:
         delta_emitter = None
         stream_spec = get_stream_spec(str(source or ""), str(card.card_type))
         if emit_deltas and self._event_store and card.id is not None and stream_spec:
+            try:
+                flush_chars = int(stream_spec.get("flush_chars") or 160)
+            except Exception:
+                flush_chars = 160
             delta_emitter = _CardDeltaEmitter(
                 self._event_store,
                 job.id,
@@ -848,6 +853,7 @@ class PipelineExecutor:
                 section=str((stream_spec.get("sections") or ["main"])[0] or "main"),
                 sections=list(stream_spec.get("sections") or ["main"]),
                 route=str(stream_spec.get("route") or "fixed"),
+                flush_chars=flush_chars,
             )
 
         card_ids_by_type: Optional[Dict[str, int]] = None
@@ -1156,6 +1162,12 @@ class PipelineExecutor:
                 if source == "scholar" and card_type == "resource.scholar.base":
                     scholar_id, query = resolve_scholar_identity(input_payload)
                     payload = run_scholar_base(scholar_id=scholar_id, researcher_name=query, user_id=job.user_id, progress=progress)
+                    self._artifact_store.save_artifact(job_id=job.id, card_id=card.id, type=card_type, payload=payload)
+                    return payload
+
+                if source == "scholar" and card_type == "resource.scholar.preview":
+                    scholar_id, query = resolve_scholar_identity(input_payload)
+                    payload = run_scholar_preview(scholar_id=scholar_id, researcher_name=query, user_id=job.user_id, progress=progress)
                     self._artifact_store.save_artifact(job_id=job.id, card_id=card.id, type=card_type, payload=payload)
                     return payload
 
@@ -1888,7 +1900,11 @@ class PipelineExecutor:
 
                 # Prefer "pseudo-streaming" (non-stream request + chunked deltas) for stability.
                 # Provider streaming can have large/unstable TTFB in production.
-                with llm_stream_context(delta_emitter.on_delta, force_stream=False):
+                force_stream = False
+                # Scholar critical review benefits from true token streaming for "typing" UX.
+                if str(source or "").strip().lower() == "scholar" and str(card.card_type) == "criticalReview":
+                    force_stream = True
+                with llm_stream_context(delta_emitter.on_delta, force_stream=force_stream):
                     return run()
             return run()
         finally:

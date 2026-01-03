@@ -426,6 +426,210 @@ def run_scholar_base(
     )
 
 
+def run_scholar_preview(
+    *,
+    scholar_id: Optional[str],
+    researcher_name: Optional[str],
+    user_id: Optional[str],
+    progress: Optional[ProgressFn] = None,
+) -> Dict[str, Any]:
+    """
+    Emit immediate skeleton prefills for Scholar UI cards (no network).
+
+    This is designed to eliminate "blank screen" time: the frontend can render card shells
+    instantly, then cards are upgraded by resource.scholar.page0/full.
+    """
+
+    if progress is None:
+        return {"preview": True, "scholar_id": scholar_id, "query": researcher_name}
+
+    sid = str(scholar_id or "").strip() or None
+    query = str(researcher_name or "").strip() or None
+    display_name = query or (sid or "")
+
+    avatar = get_random_avatar()
+    # Avoid "made-up" content; keep description empty for preview.
+    description = ""
+
+    meta = {"partial": True, "degraded": True, "source": "resource.scholar.preview", "preserve_empty": True}
+
+    prefills: list[Dict[str, Any]] = []
+
+    prefills.append(
+        {
+            "card": "researcherInfo",
+            "data": {
+                "name": display_name or None,
+                "abbreviatedName": display_name or None,
+                "affiliation": None,
+                "email": None,
+                "researchFields": [],
+                "totalCitations": None,
+                "citations5y": None,
+                "hIndex": None,
+                "hIndex5y": None,
+                "yearlyCitations": {},
+                "scholarId": sid,
+                "avatar": avatar,
+                "description": description,
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "publicationStats",
+            "data": {
+                "blockTitle": "Papers",
+                "totalPapers": None,
+                "totalCitations": None,
+                "hIndex": None,
+                "yearlyCitations": {},
+                "yearlyPapers": {},
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "publicationInsight",
+            "data": {
+                "blockTitle": "Insight",
+                "totalPapers": None,
+                "topTierPapers": None,
+                "firstAuthorPapers": None,
+                "firstAuthorCitations": None,
+                "totalCoauthors": None,
+                "lastAuthorPapers": None,
+                "conferenceDistribution": {},
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "roleModel",
+            "data": {
+                "blockTitle": "Role Model",
+                "found": False,
+                "name": None,
+                "institution": None,
+                "position": None,
+                "photoUrl": None,
+                "achievement": None,
+                "similarityReason": None,
+                "isSelf": False,
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "closestCollaborator",
+            "data": {
+                "blockTitle": "Closest Collaborator",
+                "fullName": None,
+                "affiliation": None,
+                "researchInterests": [],
+                "scholarId": None,
+                "coauthoredPapers": None,
+                "avatar": None,
+                "bestCoauthoredPaper": {
+                    "title": None,
+                    "year": None,
+                    "venue": None,
+                    "fullVenue": None,
+                    "citations": None,
+                },
+                "connectionAnalysis": None,
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "estimatedSalary",
+            "data": {
+                "blockTitle": "Estimated Salary",
+                "earningsPerYearUSD": None,
+                "levelEquivalency": {"us": None, "cn": None},
+                "reasoning": None,
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "researcherCharacter",
+            "data": {
+                "blockTitle": "Researcher Character",
+                "depthVsBreadth": None,
+                "theoryVsPractice": None,
+                "soloVsTeamwork": None,
+                "justification": None,
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "paperOfYear",
+            "data": {
+                "blockTitle": "Paper of Year",
+                "title": None,
+                "year": None,
+                "venue": None,
+                "citations": None,
+                "authorPosition": None,
+                "summary": None,
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "representativePaper",
+            "data": {
+                "blockTitle": "Representative Paper",
+                "title": None,
+                "year": None,
+                "venue": None,
+                "fullVenue": None,
+                "citations": None,
+                "authorPosition": None,
+                "paper_news": None,
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    prefills.append(
+        {
+            "card": "criticalReview",
+            "data": {
+                "blockTitle": "Roast",
+                "evaluation": "",
+            },
+            "meta": dict(meta),
+        }
+    )
+
+    try:
+        progress("preview.scholar.skeleton", "Scholar cards prefilled (skeleton)", {"prefill_cards": prefills})
+    except Exception:
+        pass
+
+    return {"preview": True, "scholar_id": sid, "query": query, "user_id": user_id}
+
+
 def run_scholar_page0(
     *,
     scholar_id: Optional[str],

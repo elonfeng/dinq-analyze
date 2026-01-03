@@ -5,10 +5,12 @@ from typing import Dict, List, Optional
 
 CARD_MATRIX: Dict[str, List[Dict[str, object]]] = {
     "scholar": [
+        # Phase -1: immediate skeleton prefill for UI (no network).
+        {"card_type": "resource.scholar.preview", "depends_on": [], "priority": 110, "concurrency_group": "default"},
         # Phase 0: base fetch (page0) for fast-first UX.
-        {"card_type": "resource.scholar.page0", "depends_on": [], "priority": 100},
+        {"card_type": "resource.scholar.page0", "depends_on": ["resource.scholar.preview"], "priority": 100},
         # Phase 1: full base report (heavier compute); used by most formatted blocks.
-        {"card_type": "resource.scholar.full", "depends_on": [], "priority": 90},
+        {"card_type": "resource.scholar.full", "depends_on": ["resource.scholar.preview"], "priority": 90},
         # Phase 2: shared fast JSON LLM (used by estimatedSalary + researcherCharacter).
         {"card_type": "resource.scholar.level", "depends_on": ["resource.scholar.full"], "priority": 80, "concurrency_group": "llm"},
         # Phase 2: formatted UI blocks (match origin/main contract).
