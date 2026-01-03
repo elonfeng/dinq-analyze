@@ -712,6 +712,31 @@ class ScholarDataFetcher:
                     )
                     return None
 
+                # Scholar avatar (profile photo)
+                try:
+                    avatar_src = None
+                    avatar_img = soup.find("img", id="gsc_prf_pup-img")
+                    if avatar_img is None:
+                        # Older layouts sometimes use a container div with an img.
+                        avatar_img = soup.select_one("#gsc_prf_pup img") or soup.select_one("#gsc_prf_pup-img")
+                    if avatar_img is not None:
+                        if hasattr(avatar_img, "get"):
+                            avatar_src = (
+                                avatar_img.get("src")
+                                or avatar_img.get("data-src")
+                                or avatar_img.get("data-lazy-src")
+                            )
+                    avatar_src = str(avatar_src or "").strip()
+                    if avatar_src:
+                        if avatar_src.startswith("//"):
+                            avatar_src = "https:" + avatar_src
+                        elif avatar_src.startswith("/"):
+                            # Resolve relative URLs against Scholar host (do NOT rewrite to DINQ base).
+                            avatar_src = "https://scholar.google.com" + avatar_src
+                        scholar_data["avatar"] = avatar_src
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error extracting scholar avatar: %s", e)
+
                 # Scholar affiliation
                 affiliation_div = soup.find(id='gsc_prf_i')
                 if affiliation_div:
@@ -1246,6 +1271,17 @@ class ScholarDataFetcher:
         out = copy.deepcopy(profile)
         if sid is not None:
             out["scholar_id"] = sid
+
+        # Scholar avatar (best-effort).
+        if out.get("avatar") is None:
+            pic = out.get("url_picture") or out.get("url_photo") or out.get("photo_url") or out.get("picture")
+            pic_s = str(pic or "").strip()
+            if pic_s:
+                if pic_s.startswith("//"):
+                    pic_s = "https:" + pic_s
+                elif pic_s.startswith("/"):
+                    pic_s = "https://scholar.google.com" + pic_s
+                out["avatar"] = pic_s
 
         # Map basics to our internal schema.
         if "total_citations" not in out and out.get("citedby") is not None:

@@ -319,7 +319,13 @@ def _build_base_report(deps: ScholarPipelineDeps, state: ScholarPipelineState) -
         return state.report or {}
 
     name = state.author_data.get("name", "")
-    avatar_url = deps.avatar_provider() if deps.avatar_provider is not None else ""
+    avatar_url = ""
+    try:
+        avatar_url = str(state.author_data.get("avatar") or "").strip()
+    except Exception:
+        avatar_url = ""
+    if not avatar_url:
+        avatar_url = deps.avatar_provider() if deps.avatar_provider is not None else ""
     description = (
         deps.description_provider(name) if deps.description_provider is not None else ""
     )

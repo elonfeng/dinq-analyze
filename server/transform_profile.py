@@ -347,10 +347,11 @@ def transform_data(source_data):
                 parsed_url = urlparse(avatar_url)
                 current_base = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-                # 如果域名与当前 BASE_URL 不同，替换为当前环境的 BASE_URL
-                if current_base != BASE_URL:
+                # 仅对“我们自己托管的图片路径”做 base 替换（用于环境迁移）。
+                # 外部头像（如 scholar.googleusercontent.com）必须保留原始域名，否则会变成死链。
+                is_internal_image = bool((parsed_url.path or "").startswith("/images/"))
+                if is_internal_image and current_base != BASE_URL:
                     logger.info(f"Replacing avatar URL base from {current_base} to {BASE_URL}")
-                    # 保留路径部分，替换域名
                     avatar_url = avatar_url.replace(current_base, BASE_URL)
             except Exception as e:
                 logger.warning(f"Error processing avatar URL: {e}")
