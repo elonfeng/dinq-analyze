@@ -23,8 +23,9 @@ CARD_MATRIX: Dict[str, List[Dict[str, object]]] = {
         {"card_type": "researcherCharacter", "depends_on": ["resource.scholar.level"], "priority": 34},
         {"card_type": "paperOfYear", "depends_on": ["resource.scholar.full"], "priority": 30},
         {"card_type": "representativePaper", "depends_on": ["resource.scholar.full"], "priority": 20},
-        # Kick off criticalReview early to overlap LLM tail with deterministic blocks.
-        {"card_type": "criticalReview", "depends_on": ["resource.scholar.full"], "priority": 75, "concurrency_group": "llm"},
+        # Kick off criticalReview as soon as page0 is ready (name/metrics are enough for the roast),
+        # so the frontend sees "typing" deltas early while resource.scholar.full continues in the background.
+        {"card_type": "criticalReview", "depends_on": ["resource.scholar.page0"], "priority": 75, "concurrency_group": "llm"},
     ],
     "github": [
         # Phase 0 (fast-first): profile-only (REST preferred). Guarantees profile UX even if full data is slow.
