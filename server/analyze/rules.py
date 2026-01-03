@@ -8,11 +8,14 @@ CARD_MATRIX: Dict[str, List[Dict[str, object]]] = {
         # Phase -1: immediate skeleton prefill for UI (no network).
         {"card_type": "resource.scholar.preview", "depends_on": [], "priority": 110, "concurrency_group": "default"},
         # Phase 0: base fetch (page0) for fast-first UX.
-        {"card_type": "resource.scholar.page0", "depends_on": ["resource.scholar.preview"], "priority": 100},
-        # Phase 1: full base report (heavier compute); used by most formatted blocks.
-        {"card_type": "resource.scholar.full", "depends_on": ["resource.scholar.preview"], "priority": 90},
+        # Run immediately (no deps) so the first real data isn't blocked by scheduler dependency release.
+        {"card_type": "resource.scholar.page0", "depends_on": [], "priority": 100},
+        # Phase 1: full base report (heavier compute); start only after page0 so it doesn't compete
+        # for Scholar domain concurrency and slow down the first-screen cards.
+        {"card_type": "resource.scholar.full", "depends_on": ["resource.scholar.page0"], "priority": 90},
         # Phase 2: shared fast JSON LLM (used by estimatedSalary + researcherCharacter).
-        {"card_type": "resource.scholar.level", "depends_on": ["resource.scholar.full"], "priority": 80, "concurrency_group": "llm"},
+        # Start as soon as page0 is ready (fast-first UX); do not block on the slower full report.
+        {"card_type": "resource.scholar.level", "depends_on": ["resource.scholar.page0"], "priority": 80, "concurrency_group": "llm"},
         # Phase 2: formatted UI blocks (match origin/main contract).
         {"card_type": "researcherInfo", "depends_on": ["resource.scholar.page0"], "priority": 80},
         {"card_type": "publicationStats", "depends_on": ["resource.scholar.full"], "priority": 70},
