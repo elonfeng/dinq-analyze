@@ -38,7 +38,8 @@ _BUILTIN_TASK_ROUTES: dict[str, str] = {
     "linkedin_roast": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
     # Strict JSON bundles: Groq primary + Gemini Flash hedge for schema stability.
     "linkedin_enrich_bundle": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
-    "researcher_evaluation": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
+    # Researcher roast: prefer low-TTFB OpenRouter Flash-Lite for streaming UX; Groq remains as hedge for p95.
+    "researcher_evaluation": "google/gemini-2.5-flash-lite,groq:llama-3.1-8b-instant",
 }
 
 _BUILTIN_HEDGE_TASKS: set[str] = {
