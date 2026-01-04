@@ -33,7 +33,7 @@ class GitHubProfileHandler(CardHandler):
     
     source = "github"
     card_type = "profile"
-    version = "2"
+    version = "3"
     
     def execute(self, ctx: ExecutionContext) -> CardResult:
         """Extract profile from resource artifacts.
@@ -42,33 +42,24 @@ class GitHubProfileHandler(CardHandler):
         1. resource.github.profile - dedicated profile artifact
         2. resource.github.data - contains user info and analysis data
         """
-        # Get profile artifact (may contain direct profile data)
-        profile = ctx.get_artifact("resource.github.profile", {})
-        if not isinstance(profile, dict):
-            profile = {}
+        profile_art = ctx.get_artifact("resource.github.profile", {})
+        if not isinstance(profile_art, dict):
+            profile_art = {}
+        profile_user = profile_art.get("user", {}) if isinstance(profile_art.get("user"), dict) else {}
         
-        # Get data artifact which contains user info
-        data = ctx.get_artifact("resource.github.data", {})
-        if not isinstance(data, dict):
-            data = {}
+        data_art = ctx.get_artifact("resource.github.data", {})
+        if not isinstance(data_art, dict):
+            data_art = {}
+        data_user = data_art.get("user", {}) if isinstance(data_art.get("user"), dict) else {}
         
-        # User info can be at top level or under "user" key
-        user = data.get("user", {}) if isinstance(data, dict) else {}
-        if not isinstance(user, dict):
-            user = {}
-        
-        # Merge all sources: data top-level < data.user < profile (last wins)
         merged = {}
-        # First add top-level data fields (login, name, etc from data artifact)
-        for k, v in data.items():
-            if k not in ("user", "_meta") and v is not None:
+        for k, v in data_art.items():
+            if k not in ("user", "_meta", "status") and v is not None:
                 merged[k] = v
-        # Then user dict
-        for k, v in user.items():
+        for k, v in data_user.items():
             if v is not None:
                 merged[k] = v
-        # Finally profile artifact (highest priority)
-        for k, v in profile.items():
+        for k, v in profile_user.items():
             if v is not None:
                 merged[k] = v
         
