@@ -947,7 +947,9 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         "You are an expert LinkedIn profile analyst.\n"
         "Return ONLY valid JSON. Do not wrap in markdown.\n"
         "All text must be in English.\n"
-        "Do not invent facts. If a field cannot be derived from the provided profile, return an empty string, null, or an empty list.\n"
+        "Do not invent factual claims about the person (no fake employers, dates, degrees, awards, or quantified achievements).\n"
+        "For *analysis/advice* fields (career, colleagues_view, life_well_being, money), you MAY infer plausible insights from the role/industry/location\n"
+        "and the visible experience/education, but avoid stating unverified facts as if they are confirmed.\n"
         "Do not output placeholder phrases like 'No data', 'Not available', or 'Unavailable'.\n"
     )
 
@@ -965,8 +967,17 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
                     "estimated_salary must be a USD digits range without commas (e.g., '2000000-3000000'). "
                     "Provide a 50-70 word explanation emphasizing scarcity and premium market value."
                 ),
-                "colleagues_view": "Return 3-5 items per list; avoid placeholders; keep each bullet concise.",
-                "life_well_being": "Highly personalized to role/industry/location; provide exactly 3 actions per section; avoid generic platitudes.",
+                "colleagues_view": (
+                    "This is an inferred perception (NOT a quote). "
+                    "Return 3-5 bullets for highlights AND 3-5 bullets for areas_for_improvement. "
+                    "Do NOT leave lists empty; infer from role/industry and visible experience. "
+                    "Keep each bullet concise and behavior-based (no unverifiable facts)."
+                ),
+                "life_well_being": (
+                    "Highly personalized to role/industry/location. "
+                    "Provide non-empty advice + exactly 3 actions per section. "
+                    "Avoid generic platitudes; make actions concrete and role-relevant."
+                ),
                 "about": "If profile.about is empty, return an empty string (do not invent).",
                 "tags": "Return 4-6 personal_tags (Title Case).",
             },

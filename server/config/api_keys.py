@@ -43,7 +43,7 @@ _ALIASES: Dict[str, Iterable[str]] = {
     # Legacy names kept for backward compatibility.
     "CRAWLBASE_API_TOKEN": ("CRAWLBASE_TOKEN",),
     "OPENROUTER_API_KEY": ("OPENROUTER_KEY",),
-    "GROQ_API_KEY": ("GROQ_KEY",),
+    "GROQ_API_KEY": ("GROQ_KEY", "DINQ_GROQ_API_KEY"),
 }
 
 
