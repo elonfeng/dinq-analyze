@@ -5,10 +5,14 @@ Handles visualization of publication trends and co-author networks.
 """
 
 import os
+import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
 import networkx as nx
 import numpy as np
+
+# Add project root to sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 
 class ScholarVisualizer:
     """

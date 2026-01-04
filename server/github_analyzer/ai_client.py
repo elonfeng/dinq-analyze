@@ -1,23 +1,18 @@
-from typing import Any, List, Dict
+from typing import Any, Dict, List, Optional
 import logging
 
 import asyncio
-from openai import AsyncOpenAI, OpenAIError
+
 from server.llm.gateway import openrouter_chat
 from server.llm.context import get_llm_stream_context
 
 
 class ChatClient:
-    """AI 聊天客户端，用于与 OpenRouter API 交互"""
-    
-    ENDPOINT = "https://openrouter.ai/api/v1"
+    """AI chat client routed through DINQ LLM gateway."""
 
     def __init__(self, options: Dict[str, Any]):
-        self.client = AsyncOpenAI(
-            api_key=options["api_key"], 
-            base_url=ChatClient.ENDPOINT
-        )
-        self.model = options["model"]
+        model = options.get("model") if isinstance(options, dict) else None
+        self.model: Optional[str] = str(model).strip() if model else None
 
     async def chat(self, messages: List[Dict[str, str]]) -> str:
         """发送聊天消息并获取响应"""
@@ -32,8 +27,8 @@ class ChatClient:
                 stream=force_stream,
                 stream_callback=callback,
             )
-        except OpenAIError as e:
-            logging.error(f"OpenAI API error: {e}")
+        except Exception as e:  # noqa: BLE001
+            logging.error(f"LLM error: {e}")
             output = ""
         return output
 

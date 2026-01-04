@@ -6,6 +6,7 @@ Handles analyzing publication data and co-authorship networks.
 
 import copy
 import os
+import sys
 import re
 # import numpy as np  # 不再需要
 import networkx as nx
@@ -53,10 +54,12 @@ real_logger.setLevel(logging.DEBUG)
 
 # 导入路径设置
 
+# Add project root to sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+
 from server.utils.conference_matcher import ConferenceMatcher
 from server.services.scholar.config import TOP_TIER_CONFERENCES, TOP_TIER_JOURNALS, TOP_TIER_VENUES
 from server.services.scholar.publication_analyzer import PublicationAnalyzer
-from server.services.scholar.cancel import raise_if_cancelled
 
 class ScholarAnalyzer:
     """
@@ -81,7 +84,7 @@ class ScholarAnalyzer:
 
         logger.info("ScholarAnalyzer initialized successfully")
 
-    def analyze_publications(self, author_data, cancel_event=None):
+    def analyze_publications(self, author_data):
         """
         Analyze publication data to extract statistics.
 
@@ -92,9 +95,9 @@ class ScholarAnalyzer:
             dict: Publication statistics
         """
         # 使用专用的 PublicationAnalyzer 类来分析出版物
-        return self.publication_analyzer.analyze_publications(author_data, cancel_event=cancel_event)
+        return self.publication_analyzer.analyze_publications(author_data)
 
-    def analyze_coauthors(self, author_data, cancel_event=None):
+    def analyze_coauthors(self, author_data):
         """
         Analyze co-authorship network.
 
@@ -104,121 +107,191 @@ class ScholarAnalyzer:
         Returns:
             dict: Co-author statistics
         """
-        raise_if_cancelled(cancel_event)
         if not author_data:
             logger.warning("No author data provided for co-author analysis")
             return None
 
         logger.info(f"Starting co-author analysis for {author_data.get('name', 'unknown researcher')}")
 
-        # Extract coauthors from publication data.
-        #
-        # IMPORTANT (product/cost):
-        # - Scholar paper count can be unbounded; do NOT store per-coauthor paper lists (explodes memory/DB/LLM context).
-        # - Keep only aggregated counts + best paper per coauthor for stable output size.
+        # Extract coauthors from publication data
+        coauthor_counter = Counter()
+        coauthor_papers = {}  # Dictionary to store papers by each coauthor
         papers = author_data.get('papers', [])
         logger.debug(f"Found {len(papers)} papers for co-author analysis")
 
+        # Get all possible forms of the main author's name
         main_author_full = author_data.get('name', '')
         main_author_abbrev = author_data.get('abbreviated_name', '')
         main_author_last = main_author_full.split()[-1] if main_author_full else ''
 
+        # Create a set of names to exclude (all forms of the main author)
         exclude_names = {main_author_full, main_author_abbrev}
+        # Also exclude any name that matches the pattern "X. Last_name" or "X Last_name"
         if main_author_last:
+            exclude_patterns = []
             for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                exclude_names.add(f"{c}. {main_author_last}")
-                exclude_names.add(f"{c} {main_author_last}")
+                exclude_patterns.append(f"{c}. {main_author_last}")
+                exclude_patterns.append(f"{c} {main_author_last}")
+            for pattern in exclude_patterns:
+                exclude_names.add(pattern)
 
-        coauthor_counter = Counter()
-        best_paper_by_coauthor = {}
-        best_citations_by_coauthor = {}
+        for paper in papers:
+            authors = paper.get('authors', [])
+            # Remove the main author from the list (all forms) and filter out "..." placeholders
+            filtered_authors = [a for a in authors if a not in exclude_names and a != "..." and not a.strip() == ""]
 
-        for idx, paper in enumerate(papers):
-            if idx % 25 == 0:
-                raise_if_cancelled(cancel_event)
+            for coauthor in filtered_authors:
+                coauthor_counter[coauthor] += 1
 
-            authors = paper.get('authors', []) or []
-            title = paper.get('title', '') or ''
-            year = paper.get('year', '') or ''
-            original_venue = paper.get('venue', '') or ''
-            venue_display = original_venue
-            try:
-                matched = self.matcher.match_conference(original_venue) if original_venue else original_venue
-                year_str = str(year).strip()
-                if matched and matched != original_venue and year_str.isdigit():
-                    venue_display = f"{matched} {year_str}"
-                elif matched:
-                    venue_display = matched
-            except Exception:  # noqa: BLE001
-                venue_display = original_venue
-            raw_citations = paper.get('citations', 0)
-            try:
-                citations = int(raw_citations)
-            except (TypeError, ValueError):
-                citations = 0
+                # Store paper details for this coauthor
+                if coauthor not in coauthor_papers:
+                    coauthor_papers[coauthor] = []
 
-            for author in authors:
-                if not author or author == "..." or not str(author).strip():
-                    continue
-                if author in exclude_names:
-                    continue
-                if main_author_full and self.is_same_person(main_author_full, author):
-                    continue
+                # 获取论文信息
+                paper_title = paper.get('title', '')
+                paper_year = paper.get('year', '')
+                original_venue = paper.get('venue', '')
+                paper_citations = paper.get('citations', 0)
 
-                name = str(author).strip()
-                coauthor_counter[name] += 1
+                # 记录原始论文信息
+                logger.debug(f"Processing paper: '{paper_title}' ({paper_year}) in venue: '{original_venue}'")
 
-                prev_best = best_citations_by_coauthor.get(name, -1)
-                if citations > prev_best:
-                    best_citations_by_coauthor[name] = citations
-                    best_paper_by_coauthor[name] = {
-                        'title': title,
-                        'year': year,
-                        'venue': venue_display,
-                        'original_venue': original_venue,
-                        'citations': citations,
-                    }
+                # 使用会议匹配功能处理venue字段
+                matched_venue = self.matcher.match_conference_with_year(original_venue) if original_venue else original_venue
 
-        try:
-            top_limit = int(os.getenv("DINQ_SCHOLAR_TOP_COAUTHORS_LIMIT", "20") or "20")
-        except (TypeError, ValueError):
-            top_limit = 20
-        top_limit = max(1, min(top_limit, 50))
+                # 如果venue没有匹配到或者匹配结果与原始venue相同，尝试从title匹配
+                if matched_venue == original_venue and paper_title:
+                    logger.debug(f"Attempting to match from title: '{paper_title}'")
+                    title_matched_venue = self.matcher.match_conference_with_year(paper_title)
 
+                    # 只有当title匹配结果不等于title本身时才使用
+                    if title_matched_venue != paper_title:
+                        logger.info(f"Title matched venue: '{paper_title}' -> '{title_matched_venue}'")
+                        matched_venue = title_matched_venue
+                    else:
+                        logger.debug(f"No title match for: '{paper_title}'")
+
+                # 如果匹配成功但没有年份，而paper有年份，则添加年份
+                original_matched_venue = matched_venue
+                if matched_venue != original_venue and paper_year and ' ' + str(paper_year) not in matched_venue:
+                    # 检查匹配结果是否已经包含年份
+                    if not re.search(r'\d{4}', matched_venue):
+                        matched_venue = f"{matched_venue} {paper_year}"
+                        logger.info(f"Added year to venue: '{original_matched_venue}' -> '{matched_venue}'")
+
+                # 无论是否匹配成功，都添加论文到合作者的论文列表中
+                coauthor_papers[coauthor].append({
+                    'title': paper_title,
+                    'year': paper_year,
+                    'venue': matched_venue,
+                    'original_venue': original_venue,
+                    'citations': paper_citations
+                })
+
+        # Get top coauthors
         top_coauthors = []
         logger.info(f"Finding top coauthors from {len(coauthor_counter)} total coauthors")
-        for idx, (coauthor, count) in enumerate(coauthor_counter.most_common(top_limit)):
-            if idx % 10 == 0:
-                raise_if_cancelled(cancel_event)
-            top_coauthors.append(
-                {
-                    'name': coauthor,
-                    'coauthored_papers': int(count),
-                    'best_paper': best_paper_by_coauthor.get(coauthor) or {'title': 'Unknown', 'citations': 0},
-                }
-            )
 
-        # Pick most frequent collaborator (first non-self coauthor).
+        for coauthor, count in coauthor_counter.most_common(10):
+            logger.debug(f"Processing coauthor: {coauthor} with {count} papers")
+
+            # Find the most cited paper with this coauthor
+            best_paper = None
+            max_citations = -1
+
+            for paper in coauthor_papers.get(coauthor, []):
+                try:
+                    citations = int(paper.get('citations', 0))
+                    if citations > max_citations:
+                        max_citations = citations
+                        best_paper = paper
+                        logger.debug(f"Found better paper for {coauthor}: '{paper.get('title', '')}' with {citations} citations")
+                except (ValueError, TypeError):
+                    logger.warning(f"Could not convert citations to integer for paper: {paper.get('title', '')}")
+                    continue
+
+            # 记录最佳合作者信息
+            if best_paper:
+                logger.info(f"Best paper with {coauthor}: '{best_paper.get('title', '')}' in {best_paper.get('venue', '')} with {max_citations} citations")
+            else:
+                logger.warning(f"No valid papers found for coauthor {coauthor}")
+
+            top_coauthors.append({
+                'name': coauthor,
+                'coauthored_papers': count,
+                'best_paper': best_paper or {'title': 'Unknown', 'citations': 0}
+            })
+
+        # 记录最频繁合作者
         most_frequent = None
-        for coauthor_info in top_coauthors:
-            coauthor_name = coauthor_info.get('name', '')
-            if not main_author_full or not self.is_same_person(main_author_full, coauthor_name):
-                most_frequent = coauthor_info
-                break
+        if top_coauthors:
+            # 确保最佳合作者不是作者自己
+            for coauthor_info in top_coauthors:
+                coauthor_name = coauthor_info['name']
+                # 使用改进的方法检查是否是作者自己
+                is_same = self.is_same_person(main_author_full, coauthor_name)
+                logger.info(f"Checking if '{main_author_full}' and '{coauthor_name}' are the same person: {is_same}")
 
-        if most_frequent is None:
-            most_frequent = {
-                'name': 'No suitable collaborator found',
-                'coauthored_papers': 0,
-                'best_paper': {'title': 'N/A', 'year': 'N/A', 'venue': 'N/A', 'citations': 0},
-            }
+                if not is_same:
+                    most_frequent = coauthor_info
+                    logger.info(f"Most frequent collaborator: {most_frequent['name']} with {most_frequent['coauthored_papers']} papers")
+                    logger.info(f"Best paper with most frequent collaborator: '{most_frequent['best_paper'].get('title', '')}' in {most_frequent['best_paper'].get('venue', '')}")
+                    break
+                else:
+                    logger.info(f"Skipping '{coauthor_name}' as it appears to be the same person as '{main_author_full}'")
 
+            # 如果所有合作者都被排除了（极少见的情况）
+            if not most_frequent and top_coauthors:
+                logger.warning(f"All top coauthors appear to be variants of the main author's name. Searching for next best collaborator.")
+                # 尝试找到第二批合作者
+                for coauthor, count in coauthor_counter.most_common(20)[10:]:
+                    # 跳过已经在top_coauthors中的合作者
+                    if any(info['name'] == coauthor for info in top_coauthors):
+                        continue
+
+                    # 检查是否是作者自己
+                    if self.is_same_person(main_author_full, coauthor):
+                        continue
+
+                    # 找到最佳论文
+                    best_paper = None
+                    max_citations = -1
+                    for paper in coauthor_papers.get(coauthor, []):
+                        try:
+                            citations = int(paper.get('citations', 0))
+                            if citations > max_citations:
+                                max_citations = citations
+                                best_paper = paper
+                        except (ValueError, TypeError):
+                            continue
+
+                    if best_paper:
+                        most_frequent = {
+                            'name': coauthor,
+                            'coauthored_papers': count,
+                            'best_paper': best_paper
+                        }
+                        logger.info(f"Using alternative collaborator: {most_frequent['name']} with {most_frequent['coauthored_papers']} papers")
+                        break
+
+                # 如果仍然没有找到合适的合作者，创建一个空的结果
+                if not most_frequent:
+                    logger.warning(f"Could not find any suitable collaborator. Creating empty result.")
+                    most_frequent = {
+                        'name': 'No suitable collaborator found',
+                        'coauthored_papers': 0,
+                        'best_paper': {'title': 'N/A', 'year': 'N/A', 'venue': 'N/A', 'citations': 0}
+                    }
+
+        # Compile results
         coauthor_stats = {
-            'main_author': main_author_full,
-            'total_coauthors': int(len(coauthor_counter)),
+            'main_author': main_author_full,  # 添加主要作者的名字
+            'total_coauthors': len(coauthor_counter),
             'top_coauthors': top_coauthors,
-            'collaboration_index': (len(coauthor_counter) / len(papers)) if papers else 0,
+            'collaboration_index': len(coauthor_counter) / len(papers) if papers else 0,
             'most_frequent_collaborator': most_frequent,
+            'all_coauthors': coauthor_counter,  # 添加所有合作者的计数
+            'coauthor_papers': coauthor_papers  # 添加合作者的论文
         }
 
         return coauthor_stats

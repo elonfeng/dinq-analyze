@@ -387,82 +387,46 @@ def find_celebrity_with_rules(profile_data: Dict[str, Any], person_name: str) ->
         celebrities = read_talents_from_csv()
         processed_celebrities = [process_talent_data(celeb) for celeb in celebrities]
 
-        def _s(v: Any) -> str:
-            return str(v).strip() if isinstance(v, str) else ""
-
-        # Extract user's profile information for matching (support multiple scraper schemas).
+        # Extract user's profile information for matching
         user_experiences = profile_data.get('experiences', [])
-        if not isinstance(user_experiences, list):
-            user_experiences = []
-        raw_skills = profile_data.get('skills', [])
+        user_skills = profile_data.get('skills', [])
+        user_headline = profile_data.get('headline', '') or profile_data.get('jobTitle', '')
 
-        user_headline = _s(profile_data.get('headline')) or _s(profile_data.get('occupation')) or _s(profile_data.get('jobTitle'))
+        # Get user's current company and title
+        user_company = ""
+        user_title = ""
+        if user_experiences:
+            user_company = user_experiences[0].get('subtitle', '')
+            user_title = user_experiences[0].get('title', '')
 
-        # Normalize skills for calculate_similarity_score (expects list[dict]).
-        user_skills: List[Dict[str, Any]] = []
-        if isinstance(raw_skills, list):
-            for s in raw_skills:
-                if isinstance(s, dict):
-                    user_skills.append(s)
-                elif isinstance(s, str) and s.strip():
-                    user_skills.append({"title": s.strip()})
-
-        def _extract_first_exp_field(keys: List[str]) -> str:
-            if not user_experiences:
-                return ""
-            e0 = user_experiences[0]
-            if not isinstance(e0, dict):
-                return ""
-            for k in keys:
-                v = e0.get(k)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-            return ""
-
-        user_company = _s(profile_data.get('companyName')) or _s(profile_data.get('company')) or _extract_first_exp_field(
-            ['companyName', 'company', 'subtitle', 'companyNameText', 'company_name']
-        )
-        user_title = _s(profile_data.get('jobTitle')) or _s(profile_data.get('headline')) or _s(profile_data.get('occupation')) or _extract_first_exp_field(
-            ['position', 'title', 'jobTitle']
-        )
-
-        # Score each celebrity based on similarity.
+        # Score each celebrity based on similarity
         scored_celebrities = []
         for celebrity in processed_celebrities:
-            if str(celebrity.get('name', '') or '').strip().lower() == str(person_name or '').strip().lower():
-                continue
             score = calculate_similarity_score(
                 user_company, user_title, user_headline, user_skills,
                 celebrity
             )
-            scored_celebrities.append((celebrity, score))
+            # Require minimum score of 15 to avoid poor matches
+            if score >= 15:
+                scored_celebrities.append((celebrity, score))
 
+        # Sort by score and select the best match with some randomization
         if scored_celebrities:
-            scored_celebrities.sort(
-                key=lambda x: (
-                    float(x[1]),
-                    int((x[0] or {}).get('salary_numeric', 0) or 0),
-                ),
-                reverse=True,
-            )
-            top_score = float(scored_celebrities[0][1])
+            scored_celebrities.sort(key=lambda x: x[1], reverse=True)
 
-            # Require a minimum similarity to avoid nonsense matches.
-            # Lower than the historical 15 because different scrapers may omit company/title fields.
-            if top_score < 10.0:
-                return None
+            # Add randomization: if multiple celebrities have similar scores (within 10 points),
+            # randomly select from the top candidates to avoid always picking the same person
+            import random
 
-            # Prefer "more successful" candidates among similarly-scored matches.
-            pool = [(c, s) for c, s in scored_celebrities if float(s) >= top_score - 10.0]
-            pool.sort(
-                key=lambda x: (
-                    float(x[1]),
-                    int((x[0] or {}).get('salary_numeric', 0) or 0),
-                ),
-                reverse=True,
-            )
-            best_match = pool[0][0]
-            return convert_celebrity_to_role_model(best_match, user_company, user_title)
+            top_score = scored_celebrities[0][1]
+            top_candidates = [celeb for celeb, score in scored_celebrities if score >= top_score - 10]
+
+            # Randomly select from top candidates
+            best_match = random.choice(top_candidates)
+
+            # Convert to role model format
+            role_model = convert_celebrity_to_role_model(best_match, user_company, user_title)
+            return role_model
 
         return None
 
@@ -764,15 +728,9 @@ def convert_linkedin_to_report(profile_data: Dict[str, Any], person_name: str) -
         }
 
 def extract_company_from_experiences(experiences: list) -> str:
-    """Extract current company from experiences (best-effort across scraper schemas)."""
-    if not isinstance(experiences, list) or not experiences:
-        return ""
-    first = experiences[0]
-    if isinstance(first, dict):
-        for k in ("companyName", "company", "subtitle", "companyNameText", "company_name", "title"):
-            v = first.get(k)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
+    """Extract current company from experiences"""
+    if experiences:
+        return experiences[0].get('subtitle', '')
     return ""
 
 def is_top_tier_company(company: str) -> bool:
@@ -816,8 +774,6 @@ def create_self_role_model(profile_data: Dict[str, Any], person_name: str) -> Di
         headline = profile_data.get('headline') or profile_data.get('jobTitle') or ""
         experiences = profile_data.get('experiences', [])
         current_company = extract_company_from_experiences(experiences)
-        if not current_company:
-            current_company = profile_data.get("companyName") or profile_data.get("company") or ""
         
         # Create enhanced achievement description
         connections = profile_data.get('connections', 0)

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
+import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -12,7 +14,7 @@ from dateutil.relativedelta import relativedelta
 import requests
 
 from server.github_analyzer.github_client import GithubClient
-from server.github_analyzer.analyzer import parse_github_datetime
+from server.github_analyzer.analyzer import DESC_PRESETS, parse_github_datetime
 from server.github_analyzer.github_queries import MostPullRequestRepositoriesQuery
 from server.utils.timing import elapsed_ms, now_perf
 
@@ -279,8 +281,13 @@ def _with_item_ids(items: Any) -> list[Dict[str, Any]]:
 
 def _work_experience_years(created_at_str: str) -> int:
     now = datetime.now(timezone.utc)
-    sign_up_at = parse_github_datetime(created_at_str) or now.replace(year=now.year - 1)
-    return max(0, int((now - sign_up_at).days / 365) + 1)
+    sign_up_at = parse_github_datetime(created_at_str)
+    if sign_up_at is None:
+        sign_up_at = now.replace(year=now.year - 1)
+    try:
+        return max(0, int(math.ceil((now - sign_up_at).days / 365)))
+    except Exception:
+        return 0
 
 
 def fetch_github_preview(*, login: str, progress: Optional[ProgressFn] = None, user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -527,7 +534,7 @@ def fetch_github_preview(*, login: str, progress: Optional[ProgressFn] = None, u
     return asyncio.run(run())
 
 
-def fetch_github_data(
+def _fetch_github_data_bundle(
     *,
     login: str,
     progress: Optional[ProgressFn] = None,
@@ -862,6 +869,193 @@ def fetch_github_data(
     return asyncio.run(run())
 
 
+def fetch_github_data(
+    *,
+    login: str,
+    progress: Optional[ProgressFn] = None,
+    user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Fetch non-AI GitHub data (upstream-aligned).
+
+    This matches the upstream `GitHubAnalyzer.analyze` non-AI computation so the downstream
+    AI prompts receive the same input shape/metrics.
+    """
+
+    token = (os.getenv("GITHUB_TOKEN") or "").strip()
+    if not token:
+        raise ValueError("missing GITHUB_TOKEN")
+
+    def emit(step: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+        if progress:
+            progress(step, message, data)
+
+    async def run() -> Dict[str, Any]:
+        github = GithubClient({"token": token})
+        try:
+            emit("profile_fetch", f"Fetching GitHub profile for {login}...", None)
+            t_profile = now_perf()
+            user_payload: Optional[Dict[str, Any]] = None
+            try:
+                user_payload = await github.profile(login)
+            except Exception as exc:  # noqa: BLE001
+                emit("profile_fetch_failed", "GitHub profile fetch failed", {"error": str(exc)[:200]})
+                user_payload = None
+            emit("timing.github.profile", "GitHub profile fetched", {"duration_ms": elapsed_ms(t_profile)})
+
+            if not isinstance(user_payload, dict) or not user_payload:
+                user_payload = user if isinstance(user, dict) else None
+
+            if not isinstance(user_payload, dict) or not user_payload:
+                raise ValueError(f'GitHub user "{login}" not found or inaccessible')
+
+            try:
+                emit(
+                    "preview.github.profile",
+                    "GitHub profile ready",
+                    {
+                        "prefill_cards": [
+                            {
+                                "card": "profile",
+                                "data": user_payload,
+                                "meta": {"partial": True, "source": "resource.github.data"},
+                            }
+                        ]
+                    },
+                )
+            except Exception:
+                pass
+
+            created_at_str = str(user_payload.get("createdAt") or "")
+            work_exp = _work_experience_years(created_at_str)
+
+            now_dt = datetime.now(timezone.utc)
+            sign_up_at = parse_github_datetime(created_at_str)
+            if sign_up_at is None:
+                try:
+                    sign_up_at = now_dt.replace(year=now_dt.year - 1)
+                except Exception:
+                    sign_up_at = now_dt - timedelta(days=365)
+
+            async def safe_github_call(coro: Any, name: str, default_value: Any) -> Any:
+                try:
+                    return await coro
+                except Exception as exc:  # noqa: BLE001
+                    emit(f"github.{name}_failed", f"GitHub {name} fetch failed", {"error": str(exc)[:200]})
+                    return default_value
+
+            pr_default = {"mutations": {"additions": 0, "deletions": 0, "languages": {}}, "nodes": []}
+            mutations_default = {"additions": 0, "deletions": 0, "languages": {}}
+
+            user_id = str(user_payload.get("id") or "").strip()
+
+            async def _mutations_or_default() -> Dict[str, Any]:
+                if not user_id:
+                    return dict(mutations_default)
+                out = await safe_github_call(github.mutations(login, user_id), "mutations", mutations_default)
+                return out if isinstance(out, dict) else dict(mutations_default)
+
+            pull_requests_data, mutations, activity, all_time_activity, most_starred_repositories, most_pull_request_repositories = await asyncio.gather(
+                safe_github_call(github.pull_requests(login), "pull_requests", pr_default),
+                _mutations_or_default(),
+                safe_github_call(github.activity(login=login), "activity", {}),
+                safe_github_call(github.activity(login=login, start_date=sign_up_at), "all_time_activity", {}),
+                safe_github_call(github.most_starred_repositories(login), "most_starred_repositories", []),
+                safe_github_call(
+                    github.most_pull_request_repositories(login, min(10, int(work_exp or 0) or 0)),
+                    "most_pull_request_repositories",
+                    [],
+                ),
+            )
+
+            pull_requests_data = pull_requests_data if isinstance(pull_requests_data, dict) else dict(pr_default)
+            mutations = mutations if isinstance(mutations, dict) else dict(mutations_default)
+            activity = activity if isinstance(activity, dict) else {}
+            all_time_activity = all_time_activity if isinstance(all_time_activity, dict) else {}
+            most_starred_repositories = most_starred_repositories if isinstance(most_starred_repositories, list) else []
+            most_pull_request_repositories = most_pull_request_repositories if isinstance(most_pull_request_repositories, list) else []
+
+            additions = int(mutations.get("additions") or 0) + int((pull_requests_data.get("mutations") or {}).get("additions") or 0)
+            deletions = int(mutations.get("deletions") or 0) + int((pull_requests_data.get("mutations") or {}).get("deletions") or 0)
+
+            languages = mutations.get("languages") if isinstance(mutations.get("languages"), dict) else {}
+            pr_langs = (pull_requests_data.get("mutations") or {}).get("languages") if isinstance((pull_requests_data.get("mutations") or {}).get("languages"), dict) else {}
+            for name, value in pr_langs.items():
+                if name not in languages:
+                    languages[name] = 0
+                try:
+                    languages[name] += int(value or 0)
+                except Exception:
+                    continue
+
+            stars_count = 0
+            for repository in most_starred_repositories:
+                if not isinstance(repository, dict):
+                    continue
+                try:
+                    stars_count += int(repository.get("stargazerCount") or 0)
+                except Exception:
+                    continue
+
+            active_days = 0
+            for _, day_data in all_time_activity.items():
+                if not isinstance(day_data, dict):
+                    continue
+                if (
+                    int(day_data.get("pull_requests") or 0) > 0
+                    or int(day_data.get("issues") or 0) > 0
+                    or int(day_data.get("comments") or 0) > 0
+                    or int(day_data.get("contributions") or 0) > 0
+                ):
+                    active_days += 1
+
+            overview = {
+                "work_experience": work_exp,
+                "stars": stars_count,
+                "issues": (user_payload.get("issues") or {}).get("totalCount") if isinstance(user_payload.get("issues"), dict) else None,
+                "pull_requests": (user_payload.get("pullRequests") or {}).get("totalCount") if isinstance(user_payload.get("pullRequests"), dict) else None,
+                "repositories": (user_payload.get("repositories") or {}).get("totalCount") if isinstance(user_payload.get("repositories"), dict) else None,
+                "additions": additions,
+                "deletions": deletions,
+                "active_days": active_days,
+            }
+
+            feature_project = None
+            if most_starred_repositories and isinstance(most_starred_repositories[0], dict):
+                most_starred_repository = most_starred_repositories[0]
+                feature_project = dict(most_starred_repository)
+                name_with_owner = str(most_starred_repository.get("nameWithOwner") or "").strip()
+                if name_with_owner:
+                    try:
+                        from server.api.github_analyzer_api import get_analyzer  # local import (heavy)
+
+                        analyzer = get_analyzer()
+                        extra = await asyncio.to_thread(analyzer.fetch_repository_extra, name_with_owner)
+                        if isinstance(extra, dict) and extra:
+                            feature_project = dict(extra)
+                            feature_project.update(most_starred_repository)
+                    except Exception:
+                        pass
+
+            pr_nodes = pull_requests_data.get("nodes") if isinstance(pull_requests_data.get("nodes"), list) else []
+            pr_total = (user_payload.get("pullRequests") or {}).get("totalCount") if isinstance(user_payload.get("pullRequests"), dict) else None
+
+            return {
+                "user": user_payload,
+                "description": random.choices(DESC_PRESETS)[0] if isinstance(DESC_PRESETS, list) and DESC_PRESETS else "",
+                "overview": overview,
+                "activity": activity,
+                "feature_project": feature_project,
+                "code_contribution": {"total": additions + deletions, "languages": languages},
+                "top_projects": most_pull_request_repositories,
+                "_pull_requests": {"mutations": pull_requests_data.get("mutations"), "nodes": pr_nodes, "totalCount": pr_total},
+            }
+        finally:
+            await github.close()
+
+    return asyncio.run(run())
+
+
 def run_github_ai(*, login: str, data: Dict[str, Any], progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
     """
     Run AI-heavy GitHub enrichments and return a partial full_report-shaped dict.
@@ -909,7 +1103,7 @@ def run_github_ai(*, login: str, data: Dict[str, Any], progress: Optional[Progre
     return asyncio.run(run())
 
 
-def run_github_enrich_bundle(
+def _run_github_enrich_bundle_legacy(
     *,
     login: str,
     base: Dict[str, Any],
@@ -1319,6 +1513,115 @@ def run_github_enrich_bundle(
         "_meta": {"llm_status": llm_status, "mode": ("fast" if fast_mode else "background"), "timeout_seconds": timeout_seconds},
     }
     return out
+
+
+def run_github_enrich_bundle(
+    *,
+    login: str,
+    base: Dict[str, Any],
+    progress: Optional[ProgressFn] = None,
+    mode: str = "fast",
+) -> Dict[str, Any]:
+    """
+    GitHub AI enrichment (upstream-aligned).
+
+    Preserve the upstream sequencing:
+      1) user_tags + repository_tags + most_valuable_pull_request
+      2) valuation_and_level + role_model + roast (fed with step-1 results)
+    """
+
+    def emit(step: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+        if progress:
+            progress(step, message, data)
+
+    from server.api.github_analyzer_api import get_analyzer  # local import (heavy)
+
+    analyzer = get_analyzer()
+    output: Dict[str, Any] = dict(base or {})
+    user_payload = output.get("user") if isinstance(output.get("user"), dict) else {}
+    feature_project = output.get("feature_project") if isinstance(output.get("feature_project"), dict) else None
+    pr_nodes = ((output.get("_pull_requests") or {}) if isinstance(output.get("_pull_requests"), dict) else {}).get("nodes") or []
+    if not isinstance(pr_nodes, list):
+        pr_nodes = []
+
+    def _extract_login(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        lowered = raw.lower().strip()
+        if lowered.startswith("http://") or lowered.startswith("https://"):
+            parts = lowered.split("github.com/", 1)
+            if len(parts) == 2:
+                tail = parts[1].split("?", 1)[0].split("#", 1)[0].strip("/")
+                if tail:
+                    return tail.split("/", 1)[0].strip()
+        return raw.lstrip("@").split("/", 1)[0].strip()
+
+    async def run() -> Dict[str, Any]:
+        emit("ai_github_step1", "Generating GitHub tags and best PR...", {"mode": str(mode or "fast")})
+        user_tags, repo_tags, most_pr = await asyncio.gather(
+            analyzer.safe_ai_call(analyzer.ai_user_tags(login), "user_tags", []),
+            analyzer.safe_ai_call(analyzer.ai_repository_tags(feature_project), "repository_tags", []),
+            analyzer.safe_ai_call(analyzer.ai_most_valuable_pull_request(pr_nodes), "most_valuable_pr", None),
+        )
+
+        merged: Dict[str, Any] = dict(output)
+        if isinstance(user_payload, dict):
+            u = dict(user_payload)
+            u["tags"] = user_tags if isinstance(user_tags, list) else []
+            merged["user"] = u
+        if isinstance(feature_project, dict) and feature_project:
+            fp = dict(feature_project)
+            fp["tags"] = repo_tags if isinstance(repo_tags, list) else []
+            merged["feature_project"] = fp
+        merged["most_valuable_pull_request"] = most_pr
+
+        # Ensure role model never suggests the user themselves (e.g. the user appears in dev_pioneers.csv).
+        original_pioneers = getattr(analyzer, "dev_pioneers_data", None)
+        login_l = str(login or "").strip().lower()
+        if isinstance(original_pioneers, list) and login_l:
+            filtered = []
+            for p in original_pioneers:
+                if not isinstance(p, dict):
+                    continue
+                if _extract_login(p.get("github")).lower() == login_l:
+                    continue
+                filtered.append(p)
+            if filtered and len(filtered) != len(original_pioneers):
+                analyzer.dev_pioneers_data = filtered
+
+        try:
+            emit("ai_github_step2", "Generating valuation, role model, and roast...", {"mode": str(mode or "fast")})
+            valuation, role_model, roast = await asyncio.gather(
+                analyzer.safe_ai_call(
+                    analyzer.ai_valuation_and_level(merged),
+                    "valuation_and_level",
+                    {"level": "Unknown", "salary_range": "Unknown"},
+                ),
+                analyzer.safe_ai_call(
+                    analyzer.ai_role_model(merged),
+                    "role_model",
+                    {"name": "Unknown", "similarity_score": 0},
+                ),
+                analyzer.safe_ai_call(analyzer.ai_roast(merged), "roast", "No roast available"),
+            )
+        finally:
+            if isinstance(original_pioneers, list):
+                analyzer.dev_pioneers_data = original_pioneers
+
+        merged["valuation_and_level"] = valuation
+        merged["role_model"] = role_model
+        merged["roast"] = roast
+        return merged
+
+    try:
+        return asyncio.run(run())
+    except Exception:
+        # Best-effort fallback: keep old logic available if something unexpected breaks.
+        try:
+            return _run_github_enrich_bundle_legacy(login=login, base=base, progress=progress, mode=mode)
+        except Exception:
+            return dict(base or {})
 
 
 def refresh_github_enrich_cache(

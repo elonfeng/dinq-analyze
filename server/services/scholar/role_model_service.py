@@ -7,7 +7,7 @@ It provides functions to find appropriate role models or create self-role models
 
 import logging
 import traceback
-from typing import Any, Callable, Dict, Optional
+from typing import Dict, Any, Optional, Callable
 
 # 获取日志记录器
 logger = logging.getLogger('server.services.scholar.role_model_service')
@@ -15,33 +15,45 @@ logger = logging.getLogger('server.services.scholar.role_model_service')
 # 导入模板人物生成函数
 from server.services.scholar.template_figure_kimi import get_template_figure
 
-def get_role_model(report: Dict[str, Any], callback: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
+def get_role_model(report: Dict[str, Any], callback: Optional[Callable] = None) -> Dict[str, Any]:
     """
     获取研究者的角色模型。
     
-    首先尝试找到外部角色模型；失败则返回 None（不要用 self-role-model 占位）。
+    首先尝试找到外部角色模型，如果失败则使用研究者自己作为角色模型。
     
     Args:
         report: 包含研究者信息的报告字典
         callback: 可选的状态回调函数
         
     Returns:
-        包含角色模型信息的字典，或 None
+        包含角色模型信息的字典
     """
     try:
         # 尝试获取角色模型
         role_model = get_template_figure(report)
 
         # 如果成功获取了角色模型，将其返回
-        if isinstance(role_model, dict) and role_model.get("name"):
+        if role_model:
             return role_model
-        return None
+        else:
+            # 当没有找到角色模型时，使用研究者自己的信息
+            self_role_model = create_self_role_model(report)
+            logger.info(f"Created self role model for researcher: {self_role_model.get('name', 'Unknown')}")
+            return self_role_model
             
     except Exception as e:
         error_trace = traceback.format_exc()
         logger.error(f"Failed to get role model: {e}")
         logger.error(f"Role model error details: {error_trace}")
-        return None
+
+        # 即使出错也创建自我角色模型
+        try:
+            self_role_model = create_self_role_model(report)
+            logger.info(f"Created self role model for researcher after error: {self_role_model.get('name', 'Unknown')}")
+            return self_role_model
+        except Exception as inner_e:
+            logger.error(f"Failed to create self role model after error: {inner_e}")
+            return None
 
 def create_self_role_model(report: Dict[str, Any]) -> Dict[str, Any]:
     """

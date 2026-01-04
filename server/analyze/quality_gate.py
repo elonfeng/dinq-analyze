@@ -249,6 +249,18 @@ def fallback_card_output(
                 or "暂时无法生成教育经历总结（可能是抓取/解析失败），建议稍后重试。",
             }
             return merge_meta(payload, _meta("fallback_career"))
+        if ct == "colleagues_view":
+            payload = {
+                "highlights": _as_list(base.get("highlights")),
+                "areas_for_improvement": _as_list(base.get("areas_for_improvement")),
+            }
+            return merge_meta(payload, _meta("fallback_colleagues_view"))
+        if ct == "life_well_being":
+            payload = {
+                "life_suggestion": str(base.get("life_suggestion") or "").strip(),
+                "health": str(base.get("health") or "").strip(),
+            }
+            return merge_meta(payload, _meta("fallback_life_well_being"))
         if ct == "role_model":
             payload = base if base else {"reason": "暂时无法生成 role model（稍后可重试）"}
             return merge_meta(payload, _meta("fallback_role_model"))
@@ -727,6 +739,35 @@ def _linkedin_money(data: Any, ctx: GateContext) -> GateDecision:
     return GateDecision(action="accept", normalized=normalized)
 
 
+def _linkedin_colleagues_view(data: Any, ctx: GateContext) -> GateDecision:
+    payload = _as_dict(data)
+    highlights = _as_list(payload.get("highlights"))
+    areas = _as_list(payload.get("areas_for_improvement"))
+    has_content = any(_is_nonempty_str(x) for x in highlights + areas)
+    normalized = {"highlights": highlights, "areas_for_improvement": areas}
+    if has_content:
+        return GateDecision(action="accept", normalized=normalized)
+    return GateDecision(
+        action="retry",
+        normalized=normalized,
+        issue=GateIssue(code="empty_colleagues_view", message="Empty colleagues_view", retryable=True),
+    )
+
+
+def _linkedin_life_well_being(data: Any, ctx: GateContext) -> GateDecision:
+    payload = _as_dict(data)
+    life = str(payload.get("life_suggestion") or "").strip()
+    health = str(payload.get("health") or "").strip()
+    normalized = {"life_suggestion": life, "health": health}
+    if life or health:
+        return GateDecision(action="accept", normalized=normalized)
+    return GateDecision(
+        action="retry",
+        normalized=normalized,
+        issue=GateIssue(code="empty_life_well_being", message="Empty life_well_being", retryable=True),
+    )
+
+
 def _linkedin_roast(data: Any, ctx: GateContext) -> GateDecision:
     if _is_nonempty_str(data):
         return GateDecision(action="accept", normalized=str(data).strip())
@@ -859,6 +900,8 @@ def _register_defaults() -> None:
     register_validator("linkedin", "profile", _linkedin_profile)
     register_validator("linkedin", "skills", _linkedin_skills)
     register_validator("linkedin", "career", _linkedin_career)
+    register_validator("linkedin", "colleagues_view", _linkedin_colleagues_view)
+    register_validator("linkedin", "life_well_being", _linkedin_life_well_being)
     register_validator("linkedin", "role_model", _linkedin_role_model)
     register_validator("linkedin", "money", _linkedin_money)
     register_validator("linkedin", "roast", _linkedin_roast)

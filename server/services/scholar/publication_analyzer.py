@@ -5,6 +5,7 @@ Handles analyzing publication data with specialized functions.
 """
 
 import os
+import sys
 import re
 import copy
 import logging
@@ -54,10 +55,10 @@ except ImportError:
         real_logger.setLevel(logging.DEBUG)
 
 # 导入获取论文新闻的工具类
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 from onepage.signature_news import get_latest_news
 from server.utils.conference_matcher import ConferenceMatcher
 from server.services.scholar.config import TOP_TIER_CONFERENCES, TOP_TIER_JOURNALS, TOP_TIER_VENUES
-from server.services.scholar.cancel import raise_if_cancelled
 
 class PublicationAnalyzer:
     """
@@ -75,7 +76,7 @@ class PublicationAnalyzer:
         self.matcher = ConferenceMatcher()
         logger.info("PublicationAnalyzer initialized successfully")
 
-    def analyze_publications(self, author_data, cancel_event=None):
+    def analyze_publications(self, author_data):
         """
         Main method to analyze publication data.
 
@@ -85,7 +86,6 @@ class PublicationAnalyzer:
         Returns:
             dict: Publication statistics
         """
-        raise_if_cancelled(cancel_event)
         if not author_data or 'papers' not in author_data:
             logger.warning("No papers found in author data")
             return {}
@@ -108,9 +108,7 @@ class PublicationAnalyzer:
         year_distribution = self._analyze_year_distribution(author_data, scholar_id)
 
         # 分析每篇论文
-        for idx, pub in enumerate(publications):
-            if idx % 25 == 0:
-                raise_if_cancelled(cancel_event)
+        for pub in publications:
             self._analyze_single_publication(pub, counters, scholar_id)
 
         # 处理arXiv论文 - 只有当Arxiv在顶级会议列表中时才加入conference_count
@@ -126,13 +124,8 @@ class PublicationAnalyzer:
         # 获取最引用论文的新闻
         paper_news = self._get_paper_news(counters['most_cited_paper'], scholar_id)
 
-        # 最终检查最引用论文（大列表会导致额外 O(n) 扫描，超大论文量时跳过以保证性能）
-        try:
-            final_check_max = int(os.getenv("DINQ_SCHOLAR_FINAL_CHECK_MOST_CITED_MAX_PAPERS", "2000") or "2000")
-        except (TypeError, ValueError):
-            final_check_max = 2000
-        if final_check_max > 0 and total_papers <= final_check_max:
-            self._final_check_most_cited_paper(publications, counters, scholar_id)
+        # 最终检查最引用论文
+        self._final_check_most_cited_paper(publications, counters, scholar_id)
 
         # 编译结果
         publication_stats = self._compile_results(
@@ -665,41 +658,13 @@ class PublicationAnalyzer:
             logger.info("Using manually calculated year distribution")
             year_distribution = dict(sorted(counters['year_count'].items()))
 
-        # Compact large lists (keep output stable and LLM-friendly even with unlimited papers).
-        def _read_int_env(name: str, default: int) -> int:
-            raw = os.getenv(name)
-            if raw is None:
-                return int(default)
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                return int(default)
-
-        first_author_limit = max(0, _read_int_env("DINQ_SCHOLAR_FIRST_AUTHOR_PAPERS_LIST_LIMIT", 50))
-        top_tier_limit = max(0, _read_int_env("DINQ_SCHOLAR_TOP_TIER_PUBLICATIONS_LIST_LIMIT", 50))
-
-        first_author_list = sorted(
-            counters['first_author_papers_list'],
-            key=lambda x: int(x.get('citations', 0) or 0),
-            reverse=True,
-        )
-        if first_author_limit:
-            first_author_list = first_author_list[:first_author_limit]
-
-        top_tier_publications = counters.get('top_tier_publications') or {'conferences': [], 'journals': []}
-        if top_tier_limit:
-            top_tier_publications = {
-                'conferences': list((top_tier_publications.get('conferences') or [])[:top_tier_limit]),
-                'journals': list((top_tier_publications.get('journals') or [])[:top_tier_limit]),
-            }
-
         # Compile results
         publication_stats = {
             'total_papers': total_papers,
             'first_author_papers': counters['first_author_papers'],
             'first_author_percentage': (counters['first_author_papers'] / total_papers * 100) if total_papers > 0 else 0,
             'first_author_citations': counters['first_author_citations'],
-            'first_author_papers_list': first_author_list,
+            'first_author_papers_list': sorted(counters['first_author_papers_list'], key=lambda x: int(x['citations']), reverse=True),
             'first_author_avg_citations': (counters['first_author_citations'] / counters['first_author_papers']) if counters['first_author_papers'] > 0 else 0,
             'last_author_papers': counters['last_author_papers'],
             'last_author_percentage': (counters['last_author_papers'] / total_papers * 100) if total_papers > 0 else 0,
@@ -714,7 +679,7 @@ class PublicationAnalyzer:
                 'avg_citations': sum(counters['citation_count']) / len(counters['citation_count']) if counters['citation_count'] else 0,
                 'median_citations': np.median(counters['citation_count']) if counters['citation_count'] else 0
             },
-            'top_tier_publications': top_tier_publications,
+            'top_tier_publications': counters['top_tier_publications'],
             'most_cited_paper': counters['most_cited_paper'],
             'paper_news': paper_news
         }

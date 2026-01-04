@@ -388,14 +388,10 @@ class LinkedInAnalyzer:
             
         try:
             logger.info(f"Searching LinkedIn URL for: {person_name}")
-
-            # Bias search towards personal LinkedIn profiles. Using a generic query often returns
-            # non-profile pages and increases false positives for common names.
-            query = f'site:linkedin.com/in "{person_name}"'
-            try:
-                response = self.tvly_client.search(query=query, max_results=10)  # type: ignore[arg-type]
-            except TypeError:
-                response = self.tvly_client.search(query=query)  # type: ignore[arg-type]
+            
+            response = self.tvly_client.search(
+                query=person_name
+            )
 
             # Extract LinkedIn URLs from search results
             linkedin_results = self.extract_linkedin_url_from_response(response, person_name)
@@ -410,58 +406,6 @@ class LinkedInAnalyzer:
         except Exception as e:
             logger.error(f"Error searching LinkedIn URL for {person_name}: {e}")
             return None
-
-    def _candidate_match_score(self, url: str, title: str, content: str, person_name: str) -> float:
-        """
-        Best-effort scoring for name -> LinkedIn profile URL candidates.
-
-        Goal: pick the *most likely* match when Tavily returns multiple /in/ profiles.
-        """
-        try:
-            url_s = str(url or "")
-            title_s = str(title or "")
-            content_s = str(content or "")
-            name_s = str(person_name or "")
-
-            # Extract slug after /in/
-            slug = ""
-            if "linkedin.com/in/" in url_s:
-                slug = url_s.split("linkedin.com/in/")[1].split("?")[0].split("/")[0]
-            slug = slug.lower()
-            slug_parts = [p for p in re.split(r"[-_]+", slug) if p and not p.isdigit()]
-            slug_text = " ".join(slug_parts)
-
-            # Normalize name tokens (ASCII-heavy; fallback to whitespace split).
-            tokens = [t for t in re.findall(r"[a-z0-9]+", name_s.lower()) if len(t) > 1]
-            if not tokens:
-                tokens = [t for t in name_s.lower().split() if len(t) > 1]
-            if not tokens:
-                return 0.0
-
-            hay = f"{title_s} {content_s}".lower()
-
-            hits_slug = 0
-            hits_text = 0
-            for t in tokens:
-                if t in slug_text or t in slug:
-                    hits_slug += 1
-                if t in hay:
-                    hits_text += 1
-
-            ratio_slug = hits_slug / max(1, len(tokens))
-            ratio_text = hits_text / max(1, len(tokens))
-
-            # Prefer slug matches (more deterministic) over snippet matches.
-            score = ratio_slug * 3.0 + ratio_text * 1.5
-
-            # Bonus: exact full-name containment in title/snippet (rare but strong).
-            full = " ".join([t for t in tokens if t])
-            if full and full in hay:
-                score += 1.0
-
-            return float(score)
-        except Exception:
-            return 0.0
 
     def extract_linkedin_url_from_response(self, response: Dict[str, Any], person_name: str) -> Optional[List[Dict[str, Any]]]:
         """
@@ -492,25 +436,16 @@ class LinkedInAnalyzer:
                 if "linkedin.com/in/" in url:
                     # Further verify if it matches the person's name
                     if self.is_likely_match(url, title, content, person_name):
-                        match_score = self._candidate_match_score(url, title, content, person_name)
                         linkedin_info = {
                             "url": url,
                             "title": title,
                             "content": content,
                             "score": score,
-                            "match_score": match_score,
                             "person_name": person_name
                         }
                         linkedin_results.append(linkedin_info)
                         
             if linkedin_results:
-                linkedin_results.sort(
-                    key=lambda it: (
-                        float(it.get("match_score") or 0.0),
-                        float(it.get("score") or 0.0),
-                    ),
-                    reverse=True,
-                )
                 logger.info(f"Found {len(linkedin_results)} LinkedIn profiles for {person_name}")
                 return linkedin_results
             else:
@@ -541,30 +476,17 @@ class LinkedInAnalyzer:
                 
                 # Convert person's name to possible LinkedIn username format
                 name_parts = person_name.lower().split()
-
-                def _valid_tokens(parts: list[str]) -> list[str]:
-                    out: list[str] = []
-                    for p in parts:
-                        s = str(p or "").strip().lower()
-                        if len(s) <= 2:
-                            continue
-                        out.append(s)
-                    return out
-
-                tokens = _valid_tokens(name_parts)
-                if not tokens:
-                    return False
-
+                
+                # Check if username contains parts of the person's name
+                for part in name_parts:
+                    if len(part) > 2 and part in linkedin_username:
+                        return True
+                        
+                # Check if title and content contain the person's name
                 search_text = (title + " " + content).lower()
-                hits = 0
-                for token in tokens:
-                    if token in linkedin_username or token in search_text:
-                        hits += 1
-
-                # For multi-token names, require more than 1 weak hit to reduce false positives.
-                if len(tokens) >= 3:
-                    return hits >= 2
-                return hits >= 1
+                for part in name_parts:
+                    if len(part) > 2 and part in search_text:
+                        return True
                         
             return False
             

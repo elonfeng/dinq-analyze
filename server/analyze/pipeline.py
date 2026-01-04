@@ -708,6 +708,10 @@ def extract_card_payload(source: str, full_report: Dict[str, Any], card_type: st
             return profile.get("role_model", {})
         if card_type == "money":
             return profile.get("money_analysis", {})
+        if card_type == "colleagues_view":
+            return profile.get("colleagues_view", {})
+        if card_type == "life_well_being":
+            return profile.get("life_well_being", {})
         if card_type == "roast":
             return profile.get("roast")
         if card_type == "summary":
@@ -1821,6 +1825,14 @@ class PipelineExecutor:
                     if ct == "money":
                         money = enrich.get("money") if isinstance(enrich.get("money"), dict) else {}
                         return money if isinstance(money, dict) else {}
+
+                    if ct == "colleagues_view":
+                        payload = enrich.get("colleagues_view") if isinstance(enrich.get("colleagues_view"), dict) else {}
+                        return payload if isinstance(payload, dict) else {}
+
+                    if ct == "life_well_being":
+                        payload = enrich.get("life_well_being") if isinstance(enrich.get("life_well_being"), dict) else {}
+                        return payload if isinstance(payload, dict) else {}
 
                     if ct == "roast":
                         existing_roast = enrich.get("roast")

@@ -13,9 +13,9 @@ CARD_MATRIX: Dict[str, List[Dict[str, object]]] = {
         # Phase 1: full base report (heavier compute); start only after page0 so it doesn't compete
         # for Scholar domain concurrency and slow down the first-screen cards.
         {"card_type": "resource.scholar.full", "depends_on": ["resource.scholar.page0"], "priority": 90},
-        # Phase 2: shared fast JSON LLM (used by estimatedSalary + researcherCharacter).
-        # Start as soon as page0 is ready (fast-first UX); do not block on the slower full report.
-        {"card_type": "resource.scholar.level", "depends_on": ["resource.scholar.page0"], "priority": 80, "concurrency_group": "llm"},
+        # Phase 2: career-level enrich (used by estimatedSalary + researcherCharacter).
+        # Align with upstream semantics: compute from the full report.
+        {"card_type": "resource.scholar.level", "depends_on": ["resource.scholar.full"], "priority": 80, "concurrency_group": "llm"},
         # Phase 2: formatted UI blocks (match origin/main contract).
         {"card_type": "researcherInfo", "depends_on": ["resource.scholar.page0"], "priority": 80},
         {"card_type": "publicationStats", "depends_on": ["resource.scholar.full"], "priority": 70},
@@ -61,6 +61,8 @@ CARD_MATRIX: Dict[str, List[Dict[str, object]]] = {
         {"card_type": "career", "depends_on": ["resource.linkedin.enrich"], "priority": 30, "concurrency_group": "default"},
         {"card_type": "role_model", "depends_on": ["resource.linkedin.enrich"], "priority": 40, "concurrency_group": "default"},
         {"card_type": "money", "depends_on": ["resource.linkedin.enrich"], "priority": 50, "concurrency_group": "default"},
+        {"card_type": "colleagues_view", "depends_on": ["resource.linkedin.enrich"], "priority": 55, "concurrency_group": "default"},
+        {"card_type": "life_well_being", "depends_on": ["resource.linkedin.enrich"], "priority": 56, "concurrency_group": "default"},
         {"card_type": "roast", "depends_on": ["profile"], "priority": 60},
         {"card_type": "summary", "depends_on": ["resource.linkedin.enrich"], "priority": 70, "concurrency_group": "default"},
     ],
