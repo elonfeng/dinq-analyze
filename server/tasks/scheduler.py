@@ -740,7 +740,7 @@ class CardScheduler:
         if not isinstance(input_payload, dict):
             input_payload = {}
 
-        pipeline_version = get_pipeline_version()
+        pipeline_version = get_pipeline_version(source)
         options_hash = compute_options_hash(options)
         ttl_seconds = cache_ttl_seconds(source)
 

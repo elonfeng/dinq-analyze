@@ -1007,10 +1007,13 @@ def analyze():
     source = (data.get("source") or "").strip().lower()
     mode = (data.get("mode") or "async").strip().lower()
     input_payload = data.get("input") or {}
-    cards_raw = data.get("cards", None)
-    if cards_raw is not None and not isinstance(cards_raw, list):
-        return jsonify({"success": False, "error": "invalid cards: must be an array of strings"}), 400
-    requested_cards = cards_raw or None
+
+    # Always return the full business card set for the source.
+    # The older optional `cards` selector is intentionally not supported to keep frontend behavior simple/stable.
+    if "cards" in data:
+        return jsonify({"success": False, "error": "cards is not supported; omit it to receive all cards"}), 400
+
+    requested_cards: Optional[list[str]] = None
     options_raw = data.get("options") or {}
 
     if not source:
@@ -1022,10 +1025,6 @@ def analyze():
 
     # Keep a copy so we can inject internal metadata without mutating the client payload.
     options = dict(options_raw or {})
-    if requested_cards:
-        cleaned = [str(c).strip() for c in requested_cards if str(c).strip()]
-        if cleaned:
-            options["_requested_cards"] = cleaned
 
     normalized_input = normalize_input_payload(source, input_payload)
 
@@ -1095,7 +1094,7 @@ def analyze():
     # - Enables "instant return" when we already have a cached final_result for a stable subject id.
     # - When cache miss, we can create initial runnable cards as READY to avoid an extra DB round trip.
     options_hash = compute_options_hash(options or {})
-    pipeline_version = get_pipeline_version()
+    pipeline_version = get_pipeline_version(source)
     force_refresh = bool((options or {}).get("force_refresh"))
     cache_hit_payload: Optional[Dict[str, Any]] = None
     cache_hit_source: Optional[str] = None

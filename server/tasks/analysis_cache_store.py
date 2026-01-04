@@ -38,6 +38,16 @@ def _dt_to_epoch_seconds(dt: Optional[datetime]) -> Optional[int]:
         return None
 
 
+def _is_fallback_payload(payload: Dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    meta = payload.get("_meta")
+    if isinstance(meta, dict):
+        if meta.get("fallback") or meta.get("is_fallback"):
+            return True
+    return False
+
+
 def build_artifact_key(*, source: str, subject_key: str, pipeline_version: str, options_hash: str, kind: str) -> str:
     raw = json.dumps(
         {
@@ -676,6 +686,9 @@ class AnalysisCacheStore:
         k = str(kind or "").strip()
         if not src or not k or subject is None or not getattr(subject, "subject_key", None):
             raise ValueError("missing source/kind/subject")
+        
+        if _is_fallback_payload(payload):
+            return ""
 
         now = datetime.utcnow()
         ttl = max(0, int(ttl_seconds or 0))
@@ -727,6 +740,9 @@ class AnalysisCacheStore:
         ttl_seconds: int,
         meta: Optional[Dict[str, Any]] = None,
     ) -> str:
+        if _is_fallback_payload(payload):
+            return ""
+        
         now = datetime.utcnow()
         ttl = max(0, int(ttl_seconds or 0))
         expires_at = (now + timedelta(seconds=ttl)) if ttl else None

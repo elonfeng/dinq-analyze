@@ -33,6 +33,7 @@ class GitHubProfileHandler(CardHandler):
     
     source = "github"
     card_type = "profile"
+    version = "2"
     
     def execute(self, ctx: ExecutionContext) -> CardResult:
         """Extract profile from resource artifacts.

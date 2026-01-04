@@ -1658,7 +1658,7 @@ def refresh_github_enrich_cache(
         return
 
     opts = options or {}
-    pipeline_version = get_pipeline_version()
+    pipeline_version = get_pipeline_version(src)
     options_hash = compute_options_hash(opts)
     ttl_seconds = cache_ttl_seconds(src)
 

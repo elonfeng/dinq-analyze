@@ -26,8 +26,16 @@ def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def get_pipeline_version() -> str:
-    return (os.getenv("DINQ_ANALYZE_PIPELINE_VERSION") or "v1").strip()
+def get_pipeline_version(source: Optional[str] = None) -> str:
+    base = (os.getenv("DINQ_ANALYZE_PIPELINE_VERSION") or "v1").strip()
+    if source:
+        try:
+            from server.analyze.handlers.registry import get_global_registry
+            handler_hash = get_global_registry().get_version_hash(source)
+            return f"{base}-h{handler_hash}"
+        except Exception:
+            pass
+    return base
 
 
 def normalize_run_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:

@@ -109,6 +109,7 @@ class CardHandler(ABC):
     # Subclasses must set these
     source: str = ""
     card_type: str = ""
+    version: str = "1"  # Bump when handler logic changes to invalidate cache
     
     @abstractmethod
     def execute(self, ctx: ExecutionContext) -> CardResult:
@@ -203,3 +204,16 @@ class HandlerRegistry:
     def list_keys(self) -> List[tuple[str, str]]:
         """List all registered (source, card_type) pairs."""
         return list(self._handlers.keys())
+    
+    def get_version_hash(self, source: str) -> str:
+        """Get combined version hash for all handlers of a source."""
+        import hashlib
+        versions = []
+        src = str(source).strip().lower()
+        for (s, ct), handler in sorted(self._handlers.items()):
+            if s == src:
+                versions.append(f"{ct}:{getattr(handler, 'version', '1')}")
+        if not versions:
+            return "0"
+        combined = "|".join(versions)
+        return hashlib.sha256(combined.encode()).hexdigest()[:8]
