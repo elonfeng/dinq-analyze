@@ -10,7 +10,6 @@ import traceback
 from typing import Dict, Any, Optional, Callable, List
 import json
 from server.llm.gateway import openrouter_chat
-from server.config.llm_models import get_model
 
 # Get logger
 logger = logging.getLogger('server.linkedin_analyzer.interpersonal_skills_service')
@@ -93,10 +92,10 @@ def generate_interpersonal_skills_with_ai(profile_data: Dict[str, Any], person_n
         skills_data = openrouter_chat(
             task="linkedin_interpersonal_skills",
             messages=[{"role": "user", "content": analysis_prompt}],
-            model=get_model("fast", task="linkedin_interpersonal_skills"),
             temperature=0.3,
-            max_tokens=600,
             expect_json=True,
+            extra={"response_format": {"type": "json_object"}},
+            max_tokens=600,
         )
         if isinstance(skills_data, list):
             skills_list = skills_data

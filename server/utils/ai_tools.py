@@ -161,9 +161,9 @@ def generate_scholar_summary(report: Dict[str, Any], max_retries=2, initial_time
             content = openrouter_chat(
                 task="scholar_summary",
                 messages=[{"role": "user", "content": prompt}],
-                model="google/gemini-2.5-flash-lite",
                 temperature=0.7,
                 max_tokens=1500,
+                timeout_seconds=float(timeout),
             )
             if not content:
                 retries += 1

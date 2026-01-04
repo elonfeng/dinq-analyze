@@ -10,7 +10,6 @@ import traceback
 from typing import Dict, Any, Optional, Callable, List
 import json
 from server.llm.gateway import openrouter_chat
-from server.config.llm_models import get_model
 
 # Get logger
 logger = logging.getLogger('server.linkedin_analyzer.colleagues_view_service')
@@ -105,10 +104,10 @@ def generate_colleagues_view_with_ai(profile_data: Dict[str, Any], person_name: 
         colleagues_view_data = openrouter_chat(
             task="linkedin_colleagues_view",
             messages=[{"role": "user", "content": analysis_prompt}],
-            model=get_model("fast", task="linkedin_colleagues_view"),
             temperature=0.3,
-            max_tokens=800,
             expect_json=True,
+            extra={"response_format": {"type": "json_object"}},
+            max_tokens=800,
         )
         if isinstance(colleagues_view_data, dict):
             logger.info(f"Successfully generated colleagues view for {person_name}")

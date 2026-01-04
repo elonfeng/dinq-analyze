@@ -336,8 +336,8 @@ class LLMGateway:
     def _resolve_routes(self, *, task: Optional[str], model: Optional[str]) -> list[RouteSpec]:
         # 1) Explicit model passed by caller (supports provider:model)
         if model:
-            r = _parse_route_spec(model)
-            return [r] if r is not None else []
+            parsed = _parse_routes(model)
+            return parsed
 
         # 2) Per-task multi-route override (comma-separated)
         env_routes = os.getenv(_env_task_routes(task))
@@ -356,8 +356,7 @@ class LLMGateway:
 
         # 4) Existing per-task model override / default model
         resolved_model = self._resolve_model(task, None)
-        r = _parse_route_spec(resolved_model)
-        return [r] if r is not None else []
+        return _parse_routes(resolved_model)
 
     def _resolve_policy(self, *, task: Optional[str], routes: list[RouteSpec], expect_json: bool, stream: bool) -> str:
         if stream or len(routes) <= 1:
@@ -369,8 +368,8 @@ class LLMGateway:
                 return v
         if task and str(task) in _BUILTIN_HEDGE_TASKS:
             return "hedge"
-        # Default: hedge strict JSON tasks; otherwise fallback.
-        return "hedge" if expect_json else "fallback"
+        # Default: fallback to secondary route only when needed.
+        return "fallback"
 
     def _hedge_delay_ms(self, *, task: Optional[str]) -> int:
         raw = os.getenv(_env_task_hedge_delay_ms(task))
@@ -459,18 +458,6 @@ class LLMGateway:
         extra: Optional[Dict[str, Any]],
         timeout_seconds: Optional[float],
     ) -> AttemptResult:
-        url = self._provider_url(route.provider)
-        headers = self._headers_for_route(route)
-        payload: Dict[str, Any] = {
-            "model": route.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": bool(stream),
-        }
-        if extra:
-            payload.update(extra)
-
         sem = self._get_provider_semaphore(route.provider)
         acquired = False
         if sem is not None:
@@ -485,6 +472,28 @@ class LLMGateway:
         breaker_key = self._breaker_key(route=route)
 
         try:
+            try:
+                url = self._provider_url(route.provider)
+                headers = self._headers_for_route(route)
+                payload: Dict[str, Any] = {
+                    "model": route.model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "stream": bool(stream),
+                }
+                if extra:
+                    payload.update(extra)
+            except Exception as exc:  # noqa: BLE001
+                return AttemptResult(
+                    route=route,
+                    duration_ms=elapsed_ms(t0),
+                    ok=False,
+                    http_status=None,
+                    error_type=f"init_error:{type(exc).__name__}",
+                    exc=exc,
+                )
+
             if stream:
                 if route.provider not in ("openrouter", "groq"):
                     return AttemptResult(route=route, duration_ms=0, ok=False, error_type="stream_unsupported", exc=None)

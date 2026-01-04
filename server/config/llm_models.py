@@ -58,12 +58,17 @@ def _first_set(*values: Optional[str]) -> str:
     return ""
 
 
-# Built-in defaults (speed-first). These are OpenRouter model IDs.
-DEFAULT_FAST = "google/gemini-2.5-flash-lite"
-DEFAULT_BALANCED = "google/gemini-2.5-flash"
-DEFAULT_FLASH_PREVIEW = "google/gemini-3-flash-preview"
-DEFAULT_CODE_FAST = "x-ai/grok-code-fast-1"
-DEFAULT_REASONING_FAST = "x-ai/grok-4.1-fast"
+# Built-in defaults (speed-first).
+#
+# These are *route specs* understood by the LLM gateway and may be comma-separated multi-routes.
+# Format examples:
+#   - OpenRouter only: "google/gemini-2.5-flash"
+#   - Groq primary + OpenRouter fallback: "groq:llama-3.1-8b-instant,google/gemini-2.5-flash-lite"
+DEFAULT_FAST = "groq:llama-3.1-8b-instant,google/gemini-2.5-flash-lite"
+DEFAULT_BALANCED = "groq:llama-3.1-8b-instant,google/gemini-2.5-flash"
+DEFAULT_FLASH_PREVIEW = "groq:llama-3.1-8b-instant,google/gemini-3-flash-preview"
+DEFAULT_CODE_FAST = "groq:llama-3.1-8b-instant,x-ai/grok-code-fast-1"
+DEFAULT_REASONING_FAST = "groq:llama-3.1-8b-instant,x-ai/grok-4.1-fast"
 
 # Built-in per-task overrides (bench-backed). These are route specs and may include provider prefixes:
 #   - OpenRouter: "google/gemini-2.5-flash"
@@ -71,16 +76,45 @@ DEFAULT_REASONING_FAST = "x-ai/grok-4.1-fast"
 #
 # NOTE: Env vars still win over these defaults.
 _BUILTIN_TASK_MODEL_OVERRIDES = {
-    # Strict JSON bundles: Groq 8B is extremely fast and passes schema in bench.
-    "github_enrich_bundle": "groq:llama-3.1-8b-instant",
-    "scholar_level_fast": "groq:llama-3.1-8b-instant",
-    # Strict JSON with larger output: prefer Groq first (speed); can be overridden by env.
-    "linkedin_enrich_bundle": "groq:llama-3.1-8b-instant",
-    "github_best_pr": "google/gemini-2.5-flash",
-    # Text / roast tasks: keep on Gemini Flash-Lite (very low latency for short outputs).
-    "linkedin_roast": "google/gemini-2.5-flash-lite",
-    "researcher_evaluation": "google/gemini-2.5-flash-lite",
+    # Strict JSON bundles: Groq first; OpenRouter fallback for robustness.
+    "github_enrich_bundle": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash",
+    "scholar_level_fast": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash",
+    "linkedin_enrich_bundle": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash",
+    "github_best_pr": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash",
+    # Text tasks: still Groq primary; Flash-Lite as low-latency fallback.
+    "linkedin_roast": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash-lite",
+    "researcher_evaluation": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash-lite",
 }
+
+
+_DEFAULT_GROQ_ROUTE = "groq:llama-3.1-8b-instant"
+_DEFAULT_OPENROUTER_FALLBACK = "google/gemini-2.5-flash-lite"
+
+
+def _ensure_groq_primary(route_spec: str) -> str:
+    parts = [p.strip() for p in str(route_spec or "").split(",") if str(p).strip()]
+    groq: Optional[str] = None
+    rest: list[str] = []
+    seen: set[str] = set()
+
+    for p in parts:
+        key = p.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if key.startswith("groq:") and groq is None:
+            groq = p
+        else:
+            rest.append(p)
+
+    if groq is None:
+        groq = _DEFAULT_GROQ_ROUTE
+
+    # Ensure Groq route is first (de-duped).
+    out = [groq] + [p for p in rest if p.lower() != groq.lower()]
+    if len(out) == 1:
+        out.append(_DEFAULT_OPENROUTER_FALLBACK)
+    return ",".join(out)
 
 
 def get_model(profile: str = "fast", *, task: Optional[str] = None) -> str:
@@ -97,52 +131,62 @@ def get_model(profile: str = "fast", *, task: Optional[str] = None) -> str:
 
     task_override = resolve_task_model(task)
     if task_override:
-        return task_override
+        return _ensure_groq_primary(task_override)
     if task:
         built_in = _BUILTIN_TASK_MODEL_OVERRIDES.get(str(task))
         if built_in and str(built_in).strip():
-            return str(built_in).strip()
+            return _ensure_groq_primary(str(built_in).strip())
 
     p = (profile or "fast").strip().lower()
 
     if p in ("balanced", "quality"):
-        return _first_set(
+        return _ensure_groq_primary(
+            _first_set(
             os.getenv("DINQ_LLM_MODEL_BALANCED"),
             os.getenv("OPENROUTER_MODEL_BALANCED"),
             os.getenv("OPENROUTER_MODEL"),
             DEFAULT_BALANCED,
+            )
         )
 
     if p in ("flash_preview", "preview"):
-        return _first_set(
+        return _ensure_groq_primary(
+            _first_set(
             os.getenv("DINQ_LLM_MODEL_FLASH_PREVIEW"),
             os.getenv("OPENROUTER_MODEL_FLASH_PREVIEW"),
             os.getenv("OPENROUTER_MODEL"),
             DEFAULT_FLASH_PREVIEW,
+            )
         )
 
     if p in ("code_fast", "code"):
-        return _first_set(
+        return _ensure_groq_primary(
+            _first_set(
             os.getenv("DINQ_LLM_MODEL_CODE_FAST"),
             os.getenv("OPENROUTER_MODEL_CODE_FAST"),
             os.getenv("OPENROUTER_MODEL"),
             DEFAULT_CODE_FAST,
+            )
         )
 
     if p in ("reasoning_fast", "reasoning"):
-        return _first_set(
+        return _ensure_groq_primary(
+            _first_set(
             os.getenv("DINQ_LLM_MODEL_REASONING_FAST"),
             os.getenv("OPENROUTER_MODEL_REASONING_FAST"),
             os.getenv("OPENROUTER_MODEL"),
             DEFAULT_REASONING_FAST,
+            )
         )
 
     # fast (default)
-    return _first_set(
+    return _ensure_groq_primary(
+        _first_set(
         os.getenv("DINQ_LLM_MODEL_FAST"),
         os.getenv("OPENROUTER_MODEL_FAST"),
         os.getenv("OPENROUTER_MODEL"),
         DEFAULT_FAST,
+        )
     )
 
 

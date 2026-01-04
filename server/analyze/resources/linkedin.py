@@ -682,12 +682,23 @@ def run_linkedin_ai_enrich(*, raw_report: Dict[str, Any], progress: Optional[Pro
     from server.api.linkedin_analyzer_api import get_linkedin_analyzer  # local import (heavy)
 
     analyzer = get_linkedin_analyzer()
-    raw_profile = ((raw_report or {}).get("profile_data") or {}).get("raw_profile") or {}
+    report_profile = (raw_report or {}).get("profile_data") if isinstance((raw_report or {}).get("profile_data"), dict) else {}
+    raw_profile = (report_profile.get("raw_profile") or {}) if isinstance(report_profile.get("raw_profile"), dict) else {}
     if not isinstance(raw_profile, dict) or not raw_profile:
         raise ValueError("missing raw_profile for linkedin ai enrich")
 
+    # raw_profile may be pruned for storage; restore experience/education lists for AI prompts.
+    exp = report_profile.get("work_experience") if isinstance(report_profile.get("work_experience"), list) else []
+    edu = report_profile.get("education") if isinstance(report_profile.get("education"), list) else []
+    if exp and (not isinstance(raw_profile.get("experiences"), list) or not raw_profile.get("experiences")):
+        raw_profile = dict(raw_profile)
+        raw_profile["experiences"] = exp
+    if edu and (not isinstance(raw_profile.get("educations"), list) or not raw_profile.get("educations")):
+        raw_profile = dict(raw_profile)
+        raw_profile["educations"] = edu
+
     linkedin_url = str((raw_report or {}).get("_linkedin_url") or "").strip() or None
-    person_name = raw_profile.get("fullName") or ((raw_report or {}).get("profile_data") or {}).get("name") or ""
+    person_name = raw_profile.get("fullName") or report_profile.get("name") or ""
     if not person_name:
         person_name = "Unknown"
 
@@ -874,13 +885,54 @@ def _compact_linkedin_profile_for_llm(raw_profile: Dict[str, Any]) -> Dict[str, 
 
 def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
     """
-    Run a single fused LLM call to generate all LinkedIn non-roast enrich outputs.
+    Upstream-aligned LinkedIn enrich bundle.
 
-    Output is stored as an internal artifact (`resource.linkedin.enrich`) and then sliced by UI cards:
-      - skills / career / money / summary / role_model
-
-    Roast is intentionally handled separately (user-facing, optional-fail).
+    The upstream `LinkedInAnalyzer` runs multiple independent AI calls and returns UI-ready
+    blocks (with default fallbacks). This wrapper preserves the unified internal artifact
+    shape expected by `/api/analyze` cards.
     """
+
+    # Reuse the upstream analyzer orchestration (multi-call) to keep prompts/fields/calcs aligned.
+    full_report = run_linkedin_ai_enrich(raw_report=raw_report, progress=progress)
+    profile = full_report.get("profile_data") if isinstance(full_report, dict) else None
+    if not isinstance(profile, dict):
+        profile = {}
+
+    skills = profile.get("skills") if isinstance(profile.get("skills"), dict) else {}
+    career = profile.get("career") if isinstance(profile.get("career"), dict) else {}
+    money = profile.get("money_analysis") if isinstance(profile.get("money_analysis"), dict) else {}
+    colleagues_view = profile.get("colleagues_view") if isinstance(profile.get("colleagues_view"), dict) else {}
+    life_well_being = profile.get("life_well_being") if isinstance(profile.get("life_well_being"), dict) else {}
+    role_model = profile.get("role_model") if isinstance(profile.get("role_model"), dict) else {}
+
+    about_s = str(profile.get("about") or "").strip()
+    tags_raw = profile.get("personal_tags") if isinstance(profile.get("personal_tags"), list) else []
+    tags: list[str] = []
+    for t in tags_raw:
+        s = str(t or "").strip()
+        if s:
+            tags.append(s)
+
+    work_summary = str(profile.get("work_experience_summary") or "").strip()
+    education_summary = str(profile.get("education_summary") or "").strip()
+    roast_s = str(profile.get("roast") or "").strip() if isinstance(profile.get("roast"), str) else ""
+
+    return {
+        "skills": skills,
+        "career": career,
+        "work_experience_summary": work_summary,
+        "education_summary": education_summary,
+        "money": money,
+        "money_analysis": money,
+        "colleagues_view": colleagues_view,
+        "life_well_being": life_well_being,
+        "summary": {"about": about_s, "personal_tags": tags},
+        "role_model": role_model,
+        "roast": roast_s,
+    }
+
+    # NOTE: The legacy fused-bundle implementation remains below (unreachable) to reduce patch
+    # churn while syncing multiple analyzers. It can be deleted once upstream parity is verified.
 
     def emit(step: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
         _emit(progress, step, message, data)

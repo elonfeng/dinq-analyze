@@ -29,10 +29,10 @@ def test_resolve_routes_from_env(monkeypatch) -> None:
     assert [r.provider for r in routes] == ["groq", "openrouter"]
 
 
-def test_policy_default_hedge_for_json() -> None:
+def test_policy_default_fallback_for_json() -> None:
     gw = LLMGateway()
     routes = [RouteSpec(provider="openrouter", model="m1"), RouteSpec(provider="openrouter", model="m2")]
-    assert gw._resolve_policy(task="t", routes=routes, expect_json=True, stream=False) == "hedge"
+    assert gw._resolve_policy(task="t", routes=routes, expect_json=True, stream=False) == "fallback"
 
 
 def test_policy_override_env(monkeypatch) -> None:
@@ -40,4 +40,3 @@ def test_policy_override_env(monkeypatch) -> None:
     routes = [RouteSpec(provider="openrouter", model="m1"), RouteSpec(provider="openrouter", model="m2")]
     monkeypatch.setenv(_env_task_policy("t"), "fallback")
     assert gw._resolve_policy(task="t", routes=routes, expect_json=True, stream=False) == "fallback"
-

@@ -151,7 +151,6 @@ def _generate_scholar_sectioned_evaluation(report: Dict[str, Any]) -> str:
     text = openrouter_chat(
         task="scholar_summary",
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        model="google/gemini-2.5-flash-lite",
         temperature=0.4,
         max_tokens=900,
     )
@@ -1824,6 +1823,10 @@ class PipelineExecutor:
                         return money if isinstance(money, dict) else {}
 
                     if ct == "roast":
+                        existing_roast = enrich.get("roast")
+                        if isinstance(existing_roast, str) and existing_roast.strip():
+                            return existing_roast.strip()
+
                         from server.linkedin_analyzer.roast_service import get_linkedin_roast
 
                         progress("ai_roast", "Generating roast...", None)

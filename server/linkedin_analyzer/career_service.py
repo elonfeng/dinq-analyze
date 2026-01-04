@@ -10,7 +10,6 @@ import traceback
 from typing import Dict, Any, Optional, Callable
 import json
 from server.llm.gateway import openrouter_chat
-from server.config.llm_models import get_model
 
 # Get logger
 logger = logging.getLogger('server.linkedin_analyzer.career_service')
@@ -106,8 +105,8 @@ def generate_career_with_ai(profile_data: Dict[str, Any], person_name: str) -> O
         career_data = openrouter_chat(
             task="linkedin_career",
             messages=[{"role": "user", "content": analysis_prompt}],
-            model=get_model("fast", task="linkedin_career"),
             temperature=0.3,
+            extra={"response_format": {"type": "json_object"}},
             max_tokens=800,
             expect_json=True,
         )
