@@ -35,21 +35,41 @@ class GitHubProfileHandler(CardHandler):
     card_type = "profile"
     
     def execute(self, ctx: ExecutionContext) -> CardResult:
-        """Extract profile from resource.github.profile artifact."""
-        profile = ctx.get_artifact("resource.github.profile", {})
+        """Extract profile from resource artifacts.
         
+        Data sources (in priority order):
+        1. resource.github.profile - dedicated profile artifact
+        2. resource.github.data - contains user info and analysis data
+        """
+        # Get profile artifact (may contain direct profile data)
+        profile = ctx.get_artifact("resource.github.profile", {})
         if not isinstance(profile, dict):
             profile = {}
         
-        # Also check resource.github.data for user info
+        # Get data artifact which contains user info
         data = ctx.get_artifact("resource.github.data", {})
+        if not isinstance(data, dict):
+            data = {}
+        
+        # User info can be at top level or under "user" key
         user = data.get("user", {}) if isinstance(data, dict) else {}
         if not isinstance(user, dict):
             user = {}
         
-        # Merge profile and user data (profile takes precedence)
-        merged = dict(user)
-        merged.update({k: v for k, v in profile.items() if v is not None})
+        # Merge all sources: data top-level < data.user < profile (last wins)
+        merged = {}
+        # First add top-level data fields (login, name, etc from data artifact)
+        for k, v in data.items():
+            if k not in ("user", "_meta") and v is not None:
+                merged[k] = v
+        # Then user dict
+        for k, v in user.items():
+            if v is not None:
+                merged[k] = v
+        # Finally profile artifact (highest priority)
+        for k, v in profile.items():
+            if v is not None:
+                merged[k] = v
         
         return CardResult(
             data={

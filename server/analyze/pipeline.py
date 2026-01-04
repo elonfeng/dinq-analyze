@@ -874,12 +874,10 @@ class PipelineExecutor:
                 # Populate artifacts from artifact store
                 try:
                     if source == "github":
-                        art = self._artifact_store.get_artifact(job.id, "resource.github.data")
-                        if art is not None and isinstance(art.payload, dict):
-                            ctx.artifacts["resource.github.data"] = art.payload
-                        art = self._artifact_store.get_artifact(job.id, "resource.github.enrich")
-                        if art is not None and isinstance(art.payload, dict):
-                            ctx.artifacts["resource.github.enrich"] = art.payload
+                        for key in ["resource.github.data", "resource.github.profile", "resource.github.enrich"]:
+                            art = self._artifact_store.get_artifact(job.id, key)
+                            if art is not None and isinstance(art.payload, dict):
+                                ctx.artifacts[key] = art.payload
                     elif source == "linkedin":
                         art = self._artifact_store.get_artifact(job.id, "resource.linkedin.raw_profile")
                         if art is not None and isinstance(art.payload, dict):
