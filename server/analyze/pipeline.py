@@ -48,6 +48,8 @@ from server.analyze.resources.scholar import (
 )
 from server.analyze.card_specs import get_stream_spec
 from server.utils.json_clean import prune_empty
+from server.analyze.handlers.registry import get_handler, has_handler
+from server.analyze.handlers.base import ExecutionContext
 
 
 _GITHUB_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$")
