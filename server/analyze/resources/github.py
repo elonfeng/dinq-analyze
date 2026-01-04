@@ -742,58 +742,6 @@ def _fetch_github_data_bundle(
                     repo_out = dict(repo)
                     repo_out["pull_requests"] = int(pr_count)
                     top_projects.append({"pull_requests": int(pr_count), "repository": repo_out})
-
-                # If the recent-window PR repos are empty/zero, fall back to multi-year aggregation using
-                # the existing yearly query (GitHub enforces <=1y spans for contributionsCollection).
-                if not _has_nonzero_prs(pr_repos_recent):
-                    try:
-                        fallback_years = int(os.getenv("DINQ_GITHUB_TOP_PROJECTS_FALLBACK_YEARS", "10") or "10")
-                    except Exception:
-                        fallback_years = 10
-                    fallback_years = max(1, min(int(fallback_years), 10))
-                    pr_years = max(1, min(int(fallback_years), int(work_exp or 0) or 1))
-
-                    now_dt = datetime.now(timezone.utc)
-                    tasks = []
-                    for i in range(1, int(pr_years) + 1):
-                        start_year = now_dt - relativedelta(years=i)
-                        tasks.append(asyncio.create_task(github.query(MostPullRequestRepositoriesQuery(login, start_year))))
-
-                    repo_map: Dict[str, Dict[str, Any]] = {}
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                    for res in results:
-                        if isinstance(res, Exception):
-                            continue
-                        if not isinstance(res, list):
-                            continue
-                        for item in res:
-                            if not isinstance(item, dict):
-                                continue
-                            repo = item.get("repository") if isinstance(item.get("repository"), dict) else None
-                            if not isinstance(repo, dict) or not repo:
-                                continue
-                            url = str(repo.get("url") or "").strip()
-                            if not url:
-                                continue
-                            contrib = item.get("contributions") if isinstance(item.get("contributions"), dict) else {}
-                            try:
-                                pr_count = int(contrib.get("totalCount") or 0)
-                            except Exception:
-                                pr_count = 0
-                            if url not in repo_map:
-                                repo_out = dict(repo)
-                                repo_out["pull_requests"] = 0
-                                repo_map[url] = {"pull_requests": 0, "repository": repo_out}
-                            total = int(repo_map[url].get("pull_requests") or 0) + int(pr_count)
-                            repo_map[url]["pull_requests"] = total
-                            repo_obj = repo_map[url].get("repository")
-                            if isinstance(repo_obj, dict):
-                                repo_obj["pull_requests"] = total
-
-                    fallback_list = list(repo_map.values())
-                    fallback_list.sort(key=lambda x: int(x.get("pull_requests") or 0), reverse=True)
-                    if fallback_list:
-                        top_projects = fallback_list[:10]
                 top_projects.sort(key=lambda x: int(x.get("pull_requests") or 0), reverse=True)
                 top_projects = _with_item_ids(top_projects)
                 if top_projects:
@@ -871,6 +819,27 @@ def _fetch_github_data_bundle(
 
 
 def fetch_github_data(
+    *,
+    login: str,
+    progress: Optional[ProgressFn] = None,
+    user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Fetch non-AI GitHub data (fast path).
+
+    Prefer the single-shot bundle to keep latency low and to keep "recent window"
+    computations (activity/top_projects) consistent with the earlier implementation.
+    """
+
+    try:
+        return _fetch_github_data_bundle(login=login, progress=progress, user=user)
+    except Exception:
+        # If the bundle query fails for any reason, fall back to the older fan-out
+        # implementation (slower, but may recover on partial data).
+        return _fetch_github_data_fanout(login=login, progress=progress, user=user)
+
+
+def _fetch_github_data_fanout(
     *,
     login: str,
     progress: Optional[ProgressFn] = None,
@@ -1545,6 +1514,100 @@ def run_github_enrich_bundle(
     if not isinstance(pr_nodes, list):
         pr_nodes = []
 
+    def _pr_candidates(prs: list[Dict[str, Any]], *, max_candidates: int) -> list[Dict[str, Any]]:
+        """
+        Select a small, high-signal PR subset for the MVP-PR LLM prompt.
+
+        Keeps behavior close to the earlier implementation: prefer high-impact PRs while
+        preserving comment order as a tie-breaker.
+        """
+
+        if not prs:
+            return []
+
+        scored: list[Dict[str, Any]] = []
+        for idx, pr in enumerate(prs):
+            if not isinstance(pr, dict):
+                continue
+            url = str(pr.get("url") or "").strip()
+            title = str(pr.get("title") or "").strip()
+            if not url or not title:
+                continue
+            item = dict(pr)
+            item["_comment_rank"] = int(idx)
+            scored.append(item)
+
+        if not scored:
+            return []
+
+        def score(p: Dict[str, Any]) -> tuple[int, int]:
+            try:
+                additions = int(p.get("additions") or 0)
+            except Exception:
+                additions = 0
+            try:
+                deletions = int(p.get("deletions") or 0)
+            except Exception:
+                deletions = 0
+            impact = additions + deletions
+            comment_rank = int(p.get("_comment_rank") or 0)
+            return (impact, -comment_rank)
+
+        k = max(5, min(int(max_candidates or 10), 50))
+        selected = sorted(scored, key=score, reverse=True)[:k]
+        selected.sort(key=lambda p: int(p.get("_comment_rank") or 0))
+        for p in selected:
+            p.pop("_comment_rank", None)
+        return selected
+
+    def _best_pr_fallback(prs: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        Deterministic MVP-PR fallback from real PR data (not fabricated).
+        """
+
+        if not prs:
+            return None
+
+        def score(p: Dict[str, Any]) -> int:
+            try:
+                additions = int(p.get("additions") or 0)
+            except Exception:
+                additions = 0
+            try:
+                deletions = int(p.get("deletions") or 0)
+            except Exception:
+                deletions = 0
+            return additions + deletions
+
+        best = max(prs, key=score)
+
+        url = str(best.get("url") or "").strip()
+        title = str(best.get("title") or "").strip()
+        try:
+            additions = int(best.get("additions") or 0)
+        except Exception:
+            additions = 0
+        try:
+            deletions = int(best.get("deletions") or 0)
+        except Exception:
+            deletions = 0
+
+        repo_name = ""
+        repo = best.get("repository") if isinstance(best.get("repository"), dict) else {}
+        if isinstance(repo, dict) and repo:
+            repo_name = str(repo.get("nameWithOwner") or repo.get("name") or "").strip()
+
+        impact = additions + deletions
+        return {
+            "repository": repo_name,
+            "url": url,
+            "title": title,
+            "additions": additions,
+            "deletions": deletions,
+            "reason": "Selected by heuristic (highest code impact among top candidates).",
+            "impact": f"{impact} lines changed",
+        }
+
     def _extract_login(value: Any) -> str:
         raw = str(value or "").strip()
         if not raw:
@@ -1560,10 +1623,21 @@ def run_github_enrich_bundle(
 
     async def run() -> Dict[str, Any]:
         emit("ai_github_step1", "Generating GitHub tags and best PR...", {"mode": str(mode or "fast")})
+
+        try:
+            if str(mode or "").strip().lower() == "background":
+                max_candidates = int(os.getenv("DINQ_GITHUB_ENRICH_PR_MAX_CANDIDATES_BG", "30") or "30")
+            else:
+                max_candidates = int(os.getenv("DINQ_GITHUB_ENRICH_PR_MAX_CANDIDATES_FAST", "10") or "10")
+        except Exception:
+            max_candidates = 10 if str(mode or "").strip().lower() != "background" else 30
+        max_candidates = max(5, min(int(max_candidates), 50))
+        candidates = _pr_candidates(pr_nodes, max_candidates=max_candidates)
+
         user_tags, repo_tags, most_pr = await asyncio.gather(
             analyzer.safe_ai_call(analyzer.ai_user_tags(login), "user_tags", []),
             analyzer.safe_ai_call(analyzer.ai_repository_tags(feature_project), "repository_tags", []),
-            analyzer.safe_ai_call(analyzer.ai_most_valuable_pull_request(pr_nodes), "most_valuable_pr", None),
+            analyzer.safe_ai_call(analyzer.ai_most_valuable_pull_request(candidates), "most_valuable_pr", None),
         )
 
         # Upstream behavior: treat empty/invalid dict as missing (None).
@@ -1574,6 +1648,9 @@ def run_github_enrich_bundle(
                 most_pr = None
         elif most_pr is not None:
             most_pr = None
+
+        if most_pr is None and candidates:
+            most_pr = _best_pr_fallback(candidates)
 
         merged: Dict[str, Any] = dict(output)
         if isinstance(user_payload, dict):
