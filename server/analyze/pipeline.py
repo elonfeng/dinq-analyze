@@ -58,107 +58,6 @@ _DAG_SOURCES = {"github", "linkedin", "scholar"}
 _COMMENT_START = "<!--"
 _COMMENT_END = "-->"
 
-
-def _build_scholar_summary_input(report: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Build a compact scholar context for LLM summarization.
-
-    The raw report can be very large (papers list); keep only key signals.
-    """
-
-    researcher = report.get("researcher") if isinstance(report.get("researcher"), dict) else {}
-    pub_stats = report.get("publication_stats") if isinstance(report.get("publication_stats"), dict) else {}
-    rating = report.get("rating") if isinstance(report.get("rating"), dict) else {}
-    coauthors = report.get("coauthor_stats") if isinstance(report.get("coauthor_stats"), dict) else {}
-
-    def _pick_paper(p: Any) -> Dict[str, Any]:
-        if not isinstance(p, dict):
-            return {}
-        out = {}
-        for k in ("title", "year", "venue", "citations", "url"):
-            if p.get(k) is not None:
-                out[k] = p.get(k)
-        return out
-
-    most_cited = _pick_paper(pub_stats.get("most_cited_paper"))
-    paper_of_year = _pick_paper(pub_stats.get("paper_of_year"))
-
-    year_dist = pub_stats.get("year_distribution") if isinstance(pub_stats.get("year_distribution"), dict) else {}
-    recent_years = sorted([str(y) for y in year_dist.keys()], reverse=True)[:6]
-    recent_year_dist = {y: year_dist.get(y) for y in recent_years}
-
-    top_fields = researcher.get("research_fields") or researcher.get("fields") or []
-    if isinstance(top_fields, str):
-        top_fields = [top_fields]
-    if not isinstance(top_fields, list):
-        top_fields = []
-
-    return {
-        "name": researcher.get("name"),
-        "affiliation": researcher.get("affiliation"),
-        "research_fields": [str(x) for x in top_fields[:8] if str(x).strip()],
-        "metrics": {
-            "total_citations": researcher.get("total_citations"),
-            "citations_5y": researcher.get("citations_5y"),
-            "h_index": researcher.get("h_index"),
-            "h_index_5y": researcher.get("h_index_5y"),
-            "total_papers": pub_stats.get("total_papers"),
-            "top_tier_papers": pub_stats.get("top_tier_papers") or pub_stats.get("top_tier_publications"),
-        },
-        "highlights": {
-            "most_cited_paper": most_cited,
-            "paper_of_year": paper_of_year,
-            "recent_year_distribution": recent_year_dist,
-            "coauthors": {
-                "total": coauthors.get("total_coauthors"),
-                "top": (coauthors.get("top_coauthors") or [])[:5],
-            },
-            "rating": rating,
-        },
-    }
-
-
-def _generate_scholar_sectioned_evaluation(report: Dict[str, Any]) -> str:
-    """
-    Generate a sectioned markdown evaluation for the Scholar 'summary' card.
-
-    IMPORTANT: The output must contain section markers on their own line:
-      <!--section:overview-->
-      <!--section:strengths-->
-      <!--section:risks-->
-      <!--section:questions-->
-    """
-
-    payload = _build_scholar_summary_input(report or {})
-    markers = [
-        "<!--section:overview-->",
-        "<!--section:strengths-->",
-        "<!--section:risks-->",
-        "<!--section:questions-->",
-    ]
-
-    system = (
-        "You are a rigorous but fair talent evaluator.\n"
-        "Write in Markdown. Keep it concise, specific, and actionable.\n\n"
-        "Output format rules (STRICT):\n"
-        "1) Use EXACTLY these section markers, each on its own line, in this order:\n"
-        + "\n".join(markers)
-        + "\n"
-        "2) After each marker, write that section's content (Markdown paragraphs/bullets).\n"
-        "3) Do NOT add any other headings or section titles outside the markers.\n"
-        "4) Do NOT repeat the markers.\n"
-    )
-    user = f"Scholar profile signals (JSON):\n{payload}"
-
-    text = openrouter_chat(
-        task="scholar_summary",
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.4,
-        max_tokens=900,
-    )
-    return str(text or "").strip()
-
-
 def _run_coro(coro) -> Any:  # type: ignore[no-untyped-def]
     """
     Run an async coroutine from sync code.
@@ -298,23 +197,47 @@ def _github_best_pr_llm(
     if not prs:
         return None, "empty"
 
-    system = (
-        "You are an expert GitHub analyst.\n"
-        "You are given a list of pull requests (PRs) for a developer.\n"
-        "The PR list is ordered by comment count DESC (most discussed first).\n\n"
-        "Return ONLY valid JSON. Do not wrap in markdown (no ``` fences).\n\n"
-        "Pick the single most valuable PR.\n"
-        "Return ONLY valid JSON with keys:\n"
-        "repository, url, title, additions, deletions, reason, impact.\n"
-        "- reason: 1-2 short sentences.\n"
-        "- impact: <= 20 words.\n"
-    )
-    user = json.dumps(prs, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    # Prompt aligned 1:1 with upstream `GitHubAnalyzer.ai_most_valuable_pull_request`.
+    messages = [
+        {
+            "role": "system",
+            "content": """
+                    You are an expert GitHub analyst.
+                    You are given an array of pull requests (PRs), each containing metadata such as:
+                        - PR title, URL, addtions, deletions, languages
+                    Your task is to:
+                        1. Analyze all PRs in the array.
+                        2. Determine which PR is the most valuable, based on a combination of:
+                            - Repository popularity (e.g., stars, forks, issues, activity)
+                            - PR impact (e.g., merged status, code changes, discussion/comments)
+                            - Importance of the target repository
+                        3. Provide a short explanation (1 - 2 sentences) of why it is the most valuable.
+                        4. A brief `impact` description summarizing what this PR contributes or changes, no more than 20 words.
+
+                    Output ONLY a valid Python dictionary with the following structure, No explanations or extra text:
+                    ```json
+                    {
+                        "repository": "owner/repo",
+                        "url": "https://github.com/owner/repo/pull/123",
+                        "title": "PR title",
+                        "additions": 99,
+                        "deletions": 99,
+                        "reason": "Concise explanation of why this PR is the most valuable."
+                        "impact": "Brief description of what this PR contributes or improves."
+                    }
+                    ```
+             """,
+        },
+        {
+            "role": "user",
+            "content": str(prs),
+        },
+    ]
 
     try:
         out = openrouter_chat(
             task="github_best_pr",
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            messages=messages,
             model=get_model("fast", task="github_best_pr"),
             temperature=0.2,
             max_tokens=260,

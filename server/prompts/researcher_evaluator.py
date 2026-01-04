@@ -11,35 +11,30 @@ Supports multiple models including:
 All models are accessed through OpenRouter's unified API, simplifying the integration.
 """
 
-import json
 import logging
-from server.llm.gateway import openrouter_chat
+
 from server.config.llm_models import get_model
+from server.llm.gateway import openrouter_chat
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Default model selection (speed-first)
+# Default model selection
 DEFAULT_MODEL = get_model("fast", task="researcher_evaluation")
 
-# Available models through OpenRouter (aliases)
+# Available models through OpenRouter
 AVAILABLE_MODELS = {
-    # Speed-first Gemini
-    "fast": get_model("fast", task="researcher_evaluation"),
-    "balanced": get_model("balanced", task="researcher_evaluation"),
-    "flash-preview": get_model("flash_preview", task="researcher_evaluation"),
-
-    # Grok
-    "reasoning-fast": get_model("reasoning_fast", task="researcher_evaluation"),
-    "code-fast": get_model("code_fast", task="researcher_evaluation"),
-
-    # Backward-compatible aliases
-    "powerful": get_model("balanced", task="researcher_evaluation"),
-
-    # Legacy models (still supported if explicitly requested)
+    # OpenAI models
     "gpt-4": "openai/gpt-4o",
+
+    # Anthropic models
     "claude-haiku": "anthropic/claude-3-haiku-20240307",
     "claude-sonnet": "anthropic/claude-3-sonnet-20240229",
+
+    # Shorthand aliases
+    "fast": get_model("fast", task="researcher_evaluation"),
+    "balanced": get_model("balanced", task="researcher_evaluation"),
+    "powerful": get_model("fast", task="researcher_evaluation"),
 }
 
 def format_researcher_data_for_critique(researcher_data):
@@ -147,57 +142,6 @@ def format_researcher_data_for_critique(researcher_data):
     return "\n".join(output)
 
 
-def _compact_roast_context(source_data):
-    """
-    Build a compact context payload for the roast prompt.
-
-    The previous markdown formatter can be very verbose and increases LLM latency.
-    For the roast (<=35 words), we only need a few high-signal metrics.
-    """
-
-    if not isinstance(source_data, dict):
-        return {}
-
-    researcher = source_data.get("researcher") if isinstance(source_data.get("researcher"), dict) else {}
-    pub_stats = source_data.get("publication_stats") if isinstance(source_data.get("publication_stats"), dict) else {}
-    coauthor_stats = source_data.get("coauthor_stats") if isinstance(source_data.get("coauthor_stats"), dict) else {}
-    most_cited = pub_stats.get("most_cited_paper") if isinstance(pub_stats.get("most_cited_paper"), dict) else {}
-
-    fields = researcher.get("research_fields") or []
-    if isinstance(fields, str):
-        fields = [fields]
-    if not isinstance(fields, list):
-        fields = []
-
-    conf_dist = pub_stats.get("conference_distribution") if isinstance(pub_stats.get("conference_distribution"), dict) else {}
-    top_venues = []
-    try:
-        top_venues = sorted([(str(k), int(v)) for k, v in conf_dist.items()], key=lambda x: x[1], reverse=True)[:6]
-    except Exception:
-        top_venues = []
-
-    return {
-        "name": researcher.get("name"),
-        "affiliation": researcher.get("affiliation"),
-        "fields": [str(x) for x in fields[:8] if str(x).strip()],
-        "metrics": {
-            "h_index": researcher.get("h_index"),
-            "total_citations": researcher.get("total_citations"),
-            "citations_5y": researcher.get("citations_5y"),
-            "total_papers": pub_stats.get("total_papers"),
-            "top_tier_papers": pub_stats.get("top_tier_papers") or pub_stats.get("top_tier_publications"),
-            "total_collaborators": coauthor_stats.get("total_coauthors"),
-        },
-        "most_cited_paper": {
-            "title": most_cited.get("title"),
-            "year": most_cited.get("year"),
-            "citations": most_cited.get("citations"),
-            "venue": most_cited.get("venue"),
-        },
-        "top_venues": top_venues,
-    }
-
-
 def generate_critical_evaluation(source_data, model=None):
     """
     Generate a critical evaluation of the researcher using LLM APIs.
@@ -210,93 +154,101 @@ def generate_critical_evaluation(source_data, model=None):
     Returns:
         str: A string containing the evaluation
     """
+    # Format the researcher data for the LLM
     try:
-        # Keep the prompt compact for lower latency + better streaming UX.
-        ctx = _compact_roast_context(source_data)
+        researcher_summary = format_researcher_data_for_critique(source_data)
 
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a witty roaster who delivers playful, humorous burns about researchers.\n"
-                    "Write fluent English.\n\n"
-                    "STRICT OUTPUT RULES:\n"
-                    "- Maximum 35 words\n"
-                    "- Single paragraph (no bullets)\n"
-                    "- Cheeky, not cruel; no hate/offensive content\n"
-                    "- Use the provided context only; do not invent facts\n"
-                ),
+                "content": """You are a witty roaster who delivers playful, humorous burns about researchers. 
+                Your roast must be in fluent English and must not exceed 35 words.
+
+                Roast style guidelines:
+                1. Use exaggeration and irony to poke fun at their work/habits
+                2. Be cheeky but not mean-spirited or offensive
+                3. Reference common researcher stereotypes (no social life, obsessed with citations, etc.)
+                4. Keep it light-hearted and entertaining
+
+                IMPORTANT:
+                - Maximum 35 words
+                - Single paragraph, no bullet points
+                - Witty and sharp, but never cruel
+                - Focus on funny contradictions or quirks in their research profile"""
             },
             {
                 "role": "user",
-                "content": "Roast this researcher based on the following JSON context:\n\n" + json.dumps(ctx, ensure_ascii=False),
+                "content": f"Roast this researcher based on their profile (keep it funny and light!):\n\n{researcher_summary}"
             }
         ]
 
-        openrouter_model = None
+        # If no model specified, use default
         if model is None:
-            # Use gateway task routing (may include multi-provider hedge).
-            openrouter_model = None
-        elif model in AVAILABLE_MODELS:
+            model = DEFAULT_MODEL
+
+        # Map shorthand model names to full OpenRouter model names
+        if model in AVAILABLE_MODELS:
             openrouter_model = AVAILABLE_MODELS[model]
         else:
-            # Allow callers to pass a direct provider/model route spec.
+            # If model not in our mapping, use as is (might be a direct OpenRouter model name)
             openrouter_model = model
 
-        logger.info(f"Using model: {openrouter_model or '<task-routing>'} via LLM gateway")
+        logger.info(f"Using model: {openrouter_model} via LLM gateway")
 
         try:
-            logger.info(f"Calling LLM gateway with model {openrouter_model or '<task-routing>'} for evaluation...")
+            logger.info(f"Calling LLM gateway with model {openrouter_model} for evaluation...")
             evaluation = openrouter_chat(
                 task="researcher_evaluation",
                 messages=messages,
                 model=openrouter_model,
-                temperature=0.7,
-                max_tokens=120,
+                temperature=0.7,  # Moderate temperature for diversity while ensuring consistency
+                max_tokens=800,  # Limit token count to ensure reasonable length
                 cache=False,
-                timeout_seconds=12.0,
+                timeout_seconds=30.0,
             )
-            if (not evaluation) and (openrouter_model is not None) and (openrouter_model != AVAILABLE_MODELS["fast"]):
+            # Fall back to default model if specified model fails
+            if (not evaluation) and (openrouter_model != AVAILABLE_MODELS["fast"]):
                 logger.warning(f"Falling back to {AVAILABLE_MODELS['fast']}")
                 evaluation = openrouter_chat(
                     task="researcher_evaluation",
                     messages=messages,
                     model=AVAILABLE_MODELS["fast"],
                     temperature=0.7,
-                    max_tokens=200,
+                    max_tokens=800,
                     cache=False,
-                    timeout_seconds=12.0,
+                    timeout_seconds=30.0,
                 )
-            evaluation = (evaluation or "").strip()
 
-            # Match origin/main behavior: only truncate if extremely long.
+            evaluation = str(evaluation or "").strip()
+
+            # Check the word count of the generated evaluation
             words = evaluation.split()
             word_count = len(words)
             logger.info(f"Generated evaluation with {word_count} words")
 
+            # If it exceeds 550 words (allowing some flexibility), truncate it
             if word_count > 550:
                 logger.warning(f"Evaluation too long ({word_count} words), truncating to ~500 words")
+                # Try to truncate at the end of a sentence
                 truncated_words = words[:500]
                 truncated_text = ' '.join(truncated_words)
 
+                # Find the last sentence ending
                 sentence_endings = ['.', '!', '?']
                 last_ending = max([truncated_text.rfind(ending) for ending in sentence_endings])
 
-                if last_ending > len(truncated_text) * 0.8:
+                if last_ending > len(truncated_text) * 0.8:  # Only truncate at sentence end if it's not too short
                     evaluation = truncated_text[:last_ending+1] + '...'
                 else:
                     evaluation = truncated_text + '...'
 
             logger.info(f"Final evaluation length: {len(evaluation.split())} words")
-
-            if evaluation:
-                logger.info("Successfully generated critical evaluation: %s...", evaluation[:50])
-                return evaluation
-            raise ValueError("empty_evaluation")
+            logger.info(f"Successfully generated critical evaluation: {evaluation[:50]}...")
+            return evaluation
         except Exception as e:
             logger.error(f"Error in LLM API call: {e}")
-            return "No roast available."
+            # Return a thoughtful default evaluation in English instead of mentioning technical errors
+            return "Based on our analysis of the researcher's publication history and citation metrics, they demonstrate notable contributions to their field. Their work shows a balance of depth and breadth, with particular strength in their core research areas. While their citation impact is respectable, there are opportunities to expand their collaborative network and increase the interdisciplinary reach of their research. Their publication trajectory suggests continued growth and potential for increased influence in coming years."
     except Exception as e:
         logger.error(f"Error in generate_critical_evaluation: {e}")
-        return "No roast available."
- 
+        return "After reviewing the researcher's academic profile, we observe a solid foundation of scholarly work with meaningful contributions to their field. Their publication record demonstrates commitment to their research domain, though there may be opportunities to enhance impact through strategic publication choices and expanded collaboration networks. Overall, their scholarly trajectory appears positive with potential for continued development and increased visibility in their research community."

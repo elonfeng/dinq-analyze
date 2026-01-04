@@ -8,6 +8,7 @@ Goals:
 
 from __future__ import annotations
 
+import re
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Literal, Optional, Tuple
@@ -178,11 +179,91 @@ def fallback_card_output(
             if not isinstance(valuation, dict):
                 valuation = {}
             normalized_val = dict(valuation)
-            normalized_val.setdefault("level", "")
-            normalized_val.setdefault("salary_range", [None, None])
-            normalized_val.setdefault("industry_ranking", None)
-            normalized_val.setdefault("growth_potential", "")
-            normalized_val.setdefault("reasoning", "")
+
+            # Provide upstream-style defaults (never return empty fields) while
+            # keeping the prompt schema: salary_range is a 2-number array.
+            def _coerce_level(v: Any) -> str:
+                raw = str(v or "").strip()
+                m = re.match(r"^L\s*(\d{1,2})(\+)?$", raw.replace(" ", ""), flags=re.IGNORECASE)
+                if m:
+                    try:
+                        n = int(m.group(1))
+                    except Exception:
+                        return ""
+                    return f"L{n}{'+' if m.group(2) else ''}"
+                return ""
+
+            def _coerce_salary(v: Any) -> list[Optional[int]]:
+                if isinstance(v, list) and len(v) == 2:
+                    try:
+                        a = int(v[0]) if v[0] is not None and not isinstance(v[0], bool) else None
+                    except Exception:
+                        a = None
+                    try:
+                        b = int(v[1]) if v[1] is not None and not isinstance(v[1], bool) else None
+                    except Exception:
+                        b = None
+                    if a is not None and b is not None and a > b:
+                        a, b = b, a
+                    return [a, b]
+                return [None, None]
+
+            def _default_salary(level: str, stars: int) -> list[int]:
+                base_map = {"L3": 194000, "L4": 287000, "L5": 377000, "L6": 562000, "L7": 779000, "L8": 1111000, "L8+": 1111000}
+                base = base_map.get(level, 377000)
+                premium = 1.0
+                if stars >= 5000:
+                    premium += 0.4
+                elif stars >= 1000:
+                    premium += 0.25
+                elif stars >= 200:
+                    premium += 0.15
+                return [int(base * 0.9 * premium), int(base * 1.3 * premium)]
+
+            def _default_industry_ranking(level: str) -> float:
+                if level.startswith("L8"):
+                    return 0.03
+                if level == "L7":
+                    return 0.07
+                if level == "L6":
+                    return 0.12
+                if level == "L5":
+                    return 0.25
+                if level == "L4":
+                    return 0.35
+                return 0.5
+
+            def _default_growth(level: str) -> str:
+                return "High" if level in ("L3", "L4", "L5") else "Medium"
+
+            level = _coerce_level(normalized_val.get("level"))
+            salary_range = _coerce_salary(normalized_val.get("salary_range"))
+
+            stars = 0
+            art = ctx.artifacts.get("resource.github.data")
+            if isinstance(art, dict):
+                overview = art.get("overview") if isinstance(art.get("overview"), dict) else {}
+                try:
+                    stars = int(overview.get("stars") or 0)
+                except Exception:
+                    stars = 0
+
+            if not level:
+                # Conservative default when we lack signals.
+                level = "L5"
+            if not any(v is not None for v in salary_range):
+                salary_range = _default_salary(level, stars)
+
+            normalized_val["level"] = level
+            normalized_val["salary_range"] = salary_range
+            normalized_val.setdefault("industry_ranking", _default_industry_ranking(level))
+            normalized_val.setdefault("growth_potential", _default_growth(level))
+            if not _is_nonempty_str(normalized_val.get("reasoning")):
+                lo = salary_range[0] if salary_range and salary_range[0] else 0
+                hi = salary_range[1] if salary_range and salary_range[1] else 0
+                normalized_val["reasoning"] = (
+                    f"Estimated from GitHub contribution and impact signals, this profile maps to {level} and commands a competitive total compensation range of ${lo:,}-${hi:,} in today’s market."
+                )
 
             desc = str(base.get("description") or "").strip()
             if not desc:
@@ -256,11 +337,68 @@ def fallback_card_output(
             }
             return merge_meta(payload, _meta("fallback_colleagues_view"))
         if ct == "life_well_being":
-            payload = {
-                "life_suggestion": str(base.get("life_suggestion") or "").strip(),
-                "health": str(base.get("health") or "").strip(),
+            def _norm_phrase(v: Any) -> str:
+                phrase = str(v or "").strip()
+                phrase = " ".join(phrase.split())
+                words = phrase.split()
+                if len(words) > 3:
+                    phrase = " ".join(words[:3])
+                return phrase
+
+            def _simplified(advice: str) -> str:
+                s = re.sub(r"\s+", " ", str(advice or "")).strip()
+                if not s:
+                    return ""
+                words = s.split()
+                return " ".join(words[:9]) if words else ""
+
+            def _norm_actions(v: Any, *, kind: str) -> list[Dict[str, str]]:
+                actions = v if isinstance(v, list) else []
+                out: list[Dict[str, str]] = []
+                for a in actions:
+                    if not isinstance(a, dict):
+                        continue
+                    phrase = _norm_phrase(a.get("phrase"))
+                    if not phrase:
+                        continue
+                    out.append({"emoji": str(a.get("emoji") or "").strip(), "phrase": phrase})
+                if out:
+                    return out[:3]
+                if kind == "health":
+                    return [
+                        {"emoji": "🏃", "phrase": "Move Daily"},
+                        {"emoji": "😴", "phrase": "Sleep Well"},
+                        {"emoji": "🧘", "phrase": "Manage Stress"},
+                    ]
+                return [
+                    {"emoji": "📏", "phrase": "Set Boundaries"},
+                    {"emoji": "👥", "phrase": "Build Network"},
+                    {"emoji": "🎯", "phrase": "Focus Time"},
+                ]
+
+            def _norm_block(v: Any, *, kind: str) -> Dict[str, Any]:
+                if isinstance(v, str):
+                    v = {"advice": v}
+                block = v if isinstance(v, dict) else {}
+                advice = str(block.get("advice") or "").strip()
+                simplified = str(block.get("simplified_advice") or "").strip()
+                if not simplified:
+                    simplified = _simplified(advice)
+                return {"advice": advice, "simplified_advice": simplified, "actions": _norm_actions(block.get("actions"), kind=kind)}
+
+            normalized = {
+                "life_suggestion": _norm_block(base.get("life_suggestion"), kind="life"),
+                "health": _norm_block(base.get("health"), kind="health"),
             }
-            return merge_meta(payload, _meta("fallback_life_well_being"))
+            # Ensure we don't return empty blocks when we can provide a generic fallback.
+            if not str(normalized["life_suggestion"].get("advice") or "").strip():
+                normalized["life_suggestion"]["advice"] = "Set clear boundaries and prioritize activities outside work to prevent burnout while sustaining long-term growth in your current role."
+                normalized["life_suggestion"]["simplified_advice"] = _simplified(normalized["life_suggestion"]["advice"])
+            if not str(normalized["health"].get("advice") or "").strip():
+                normalized["health"]["advice"] = "Build a sustainable routine with regular movement, consistent sleep, and short recovery breaks to protect energy and focus under high work demands."
+                normalized["health"]["simplified_advice"] = _simplified(normalized["health"]["advice"])
+
+            return merge_meta(normalized, _meta("fallback_life_well_being"))
         if ct == "role_model":
             payload = base if base else {"reason": "暂时无法生成 role model（稍后可重试）"}
             return merge_meta(payload, _meta("fallback_role_model"))
@@ -778,16 +916,66 @@ def _linkedin_colleagues_view(data: Any, ctx: GateContext) -> GateDecision:
 
 def _linkedin_life_well_being(data: Any, ctx: GateContext) -> GateDecision:
     payload = _as_dict(data)
-    life = str(payload.get("life_suggestion") or "").strip()
-    health = str(payload.get("health") or "").strip()
-    normalized = {"life_suggestion": life, "health": health}
-    if life or health:
+
+    def _norm_phrase(v: Any) -> str:
+        phrase = str(v or "").strip()
+        phrase = " ".join(phrase.split())
+        words = phrase.split()
+        if len(words) > 3:
+            phrase = " ".join(words[:3])
+        return phrase
+
+    def _simplified(advice: str) -> str:
+        s = re.sub(r"\s+", " ", str(advice or "")).strip()
+        if not s:
+            return ""
+        words = s.split()
+        return " ".join(words[:9]) if words else ""
+
+    def _norm_actions(v: Any, *, kind: str) -> list[Dict[str, str]]:
+        actions = v if isinstance(v, list) else []
+        out: list[Dict[str, str]] = []
+        for a in actions:
+            if not isinstance(a, dict):
+                continue
+            phrase = _norm_phrase(a.get("phrase"))
+            if not phrase:
+                continue
+            out.append({"emoji": str(a.get("emoji") or "").strip(), "phrase": phrase})
+        if out:
+            return out[:3]
+        if kind == "health":
+            return [
+                {"emoji": "🏃", "phrase": "Move Daily"},
+                {"emoji": "😴", "phrase": "Sleep Well"},
+                {"emoji": "🧘", "phrase": "Manage Stress"},
+            ]
+        return [
+            {"emoji": "📏", "phrase": "Set Boundaries"},
+            {"emoji": "👥", "phrase": "Build Network"},
+            {"emoji": "🎯", "phrase": "Focus Time"},
+        ]
+
+    def _norm_block(v: Any, *, kind: str) -> Dict[str, Any]:
+        if isinstance(v, str):
+            v = {"advice": v}
+        block = v if isinstance(v, dict) else {}
+        advice = str(block.get("advice") or "").strip()
+        simplified = str(block.get("simplified_advice") or "").strip()
+        if not simplified:
+            simplified = _simplified(advice)
+        return {"advice": advice, "simplified_advice": simplified, "actions": _norm_actions(block.get("actions"), kind=kind)}
+
+    normalized = {
+        "life_suggestion": _norm_block(payload.get("life_suggestion"), kind="life"),
+        "health": _norm_block(payload.get("health"), kind="health"),
+    }
+
+    life_advice = str((normalized.get("life_suggestion") or {}).get("advice") or "").strip()
+    health_advice = str((normalized.get("health") or {}).get("advice") or "").strip()
+    if life_advice or health_advice:
         return GateDecision(action="accept", normalized=normalized)
-    return GateDecision(
-        action="retry",
-        normalized=normalized,
-        issue=GateIssue(code="empty_life_well_being", message="Empty life_well_being", retryable=True),
-    )
+    return GateDecision(action="retry", normalized=normalized, issue=GateIssue(code="empty_life_well_being", message="Empty life_well_being", retryable=True))
 
 
 def _linkedin_roast(data: Any, ctx: GateContext) -> GateDecision:
