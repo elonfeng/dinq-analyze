@@ -20,7 +20,7 @@ from server.analyze.cache_policy import (
     get_pipeline_version,
     is_cacheable_subject,
 )
-from server.analyze.quality_gate import GateContext, validate_card_output
+from server.analyze.quality_gate import GateContext, validate_card_output, fallback_card_output
 from server.tasks.artifact_store import ArtifactStore
 from server.tasks.analysis_cache_store import AnalysisCacheStore
 from server.tasks.job_store import JobStore
@@ -261,7 +261,11 @@ class CardScheduler:
                     meta2 = output.get("data", {}).get("_meta")
                     if isinstance(meta2, dict) and meta2.get("preserve_empty") is True:
                         preserve = True
-            if not preserve:
+            # CRITICAL FIX: Only prune internal cards (resource.*, full_report).
+            # Business cards must preserve their schema even when empty to avoid breaking frontend.
+            # CRITICAL FIX: Only prune internal cards (resource.*, full_report).
+            # Business cards must preserve their schema even when empty to avoid breaking frontend.
+            if not preserve and internal:
                 cleaned = prune_empty(output)
                 if cleaned is not None:
                     output = cleaned
@@ -548,34 +552,28 @@ class CardScheduler:
                             pass
                         return
 
-                    self._job_store.update_card_status(card_id=card_id, status="failed", ended_at=datetime.utcnow())
+                    # CRITICAL FIX: Use fallback_card_output instead of marking as failed
+                    # This ensures frontend always gets valid schema
+                    logger.warning(
+                        "Quality gate retry exhausted for %s/%s (job=%s, card=%s), using fallback",
+                        src, ct, job_id, card_id
+                    )
                     try:
-                        self._job_store.mark_dependent_cards_skipped(job_id, ct)
-                    except Exception:
-                        pass
-                    try:
-                        self._event_store.append_event(
-                            job_id=job_id,
-                            card_id=card_id,
-                            event_type="card.failed",
-                            payload={
-                                "card": ct,
-                                "internal": False,
-                                "timing": {"duration_ms": elapsed_ms(started_perf)},
-                                "error": {
-                                    "code": decision.issue.code if decision.issue else "quality_gate",
-                                    "message": decision.issue.message if decision.issue else "quality gate failed",
-                                    "retryable": False,
-                                },
-                            },
+                        fallback_payload = fallback_card_output(
+                            source=src,
+                            card_type=ct,
+                            ctx=ctx,
+                            last_decision=decision,
+                            error=None,
                         )
-                    except Exception:
-                        pass
-                    try:
-                        self._job_store.release_ready_cards(job_id)
-                    except Exception:
-                        pass
-                    return
+                        stored_output = fallback_payload
+                    except Exception as fb_exc:
+                        logger.exception("Fallback generation failed for %s/%s: %s", src, ct, fb_exc)
+                        # Ultimate fallback: empty dict with preserve_empty meta
+                        stored_output = {"_meta": {"fallback": True, "preserve_empty": True, "error": "fallback_failed"}}
+                    
+                    # Don't return early - let the card complete with fallback payload below
+                    # (execution will continue to line ~580 where card is marked completed)
                 else:
                     stored_output = decision.normalized
 

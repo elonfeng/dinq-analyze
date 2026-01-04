@@ -1,4 +1,5 @@
 from __future__ import annotations
+from server.analyze.meta_utils import ensure_meta
 
 import json
 import os
@@ -912,7 +913,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     education_summary = str(profile.get("education_summary") or "").strip()
     roast_s = str(profile.get("roast") or "").strip() if isinstance(profile.get("roast"), str) else ""
 
-    return {
+    return ensure_meta({
         "skills": skills,
         "career": career,
         "work_experience_summary": work_summary,
@@ -924,7 +925,7 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
         "summary": {"about": about_s, "personal_tags": tags},
         "role_model": role_model,
         "roast": roast_s,
-    }
+    }, source="linkedin_enrich", preserve_empty=True)
 
     # NOTE: The legacy fused-bundle implementation remains below (unreachable) to reduce patch
     # churn while syncing multiple analyzers. It can be deleted once upstream parity is verified.

@@ -1565,6 +1565,15 @@ def run_github_enrich_bundle(
             analyzer.safe_ai_call(analyzer.ai_most_valuable_pull_request(pr_nodes), "most_valuable_pr", None),
         )
 
+        # Upstream behavior: treat empty/invalid dict as missing (None).
+        if isinstance(most_pr, dict):
+            url = str(most_pr.get("url") or "").strip()
+            title = str(most_pr.get("title") or "").strip()
+            if not url or not title:
+                most_pr = None
+        elif most_pr is not None:
+            most_pr = None
+
         merged: Dict[str, Any] = dict(output)
         if isinstance(user_payload, dict):
             u = dict(user_payload)
@@ -1612,7 +1621,7 @@ def run_github_enrich_bundle(
         merged["valuation_and_level"] = valuation
         merged["role_model"] = role_model
         merged["roast"] = roast
-        return merged
+        return ensure_meta(merged, source="github_enrich", preserve_empty=True)
 
     try:
         return asyncio.run(run())
@@ -1621,7 +1630,7 @@ def run_github_enrich_bundle(
         try:
             return _run_github_enrich_bundle_legacy(login=login, base=base, progress=progress, mode=mode)
         except Exception:
-            return dict(base or {})
+            return ensure_meta(dict(base or {}), source="github_enrich_fallback", fallback=True)
 
 
 def refresh_github_enrich_cache(

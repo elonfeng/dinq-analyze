@@ -850,6 +850,76 @@ class PipelineExecutor:
             raise ValueError("job not found")
 
         source = job.source
+        
+        # NEW: Try handler-based execution first (Phase 2 refactoring)
+        ct = str(card.card_type or "").strip()
+        if has_handler(source, ct):
+            handler = get_handler(source, ct)
+            if handler is not None:
+                # Build execution context
+                ctx = ExecutionContext(
+                    job_id=str(job.id),
+                    card_id=int(card.id) if card.id is not None else 0,
+                    user_id=str(job.user_id or ""),
+                    source=str(source or "").lower(),
+                    card_type=ct,
+                    card_input=getattr(card, "input", None) or {},
+                    options=getattr(job, "options", None) or {},
+                    artifacts={},  # Will populate below
+                    retry_count=int(getattr(card, "retry_count", 0) or 0),
+                )
+                
+                # Populate artifacts from artifact store
+                try:
+                    if source == "github":
+                        art = self._artifact_store.get_artifact(job.id, "resource.github.data")
+                        if art is not None and isinstance(art.payload, dict):
+                            ctx.artifacts["resource.github.data"] = art.payload
+                        art = self._artifact_store.get_artifact(job.id, "resource.github.enrich")
+                        if art is not None and isinstance(art.payload, dict):
+                            ctx.artifacts["resource.github.enrich"] = art.payload
+                    elif source == "linkedin":
+                        art = self._artifact_store.get_artifact(job.id, "resource.linkedin.raw_profile")
+                        if art is not None and isinstance(art.payload, dict):
+                            ctx.artifacts["resource.linkedin.raw_profile"] = art.payload
+                        art = self._artifact_store.get_artifact(job.id, "resource.linkedin.enrich")
+                        if art is not None and isinstance(art.payload, dict):
+                            ctx.artifacts["resource.linkedin.enrich"] = art.payload
+                    elif source == "scholar":
+                        for key in ["resource.scholar.page0", "resource.scholar.base", "resource.scholar.full"]:
+                            art = self._artifact_store.get_artifact(job.id, key)
+                            if art is not None and isinstance(art.payload, dict):
+                                ctx.artifacts[key] = art.payload
+                except Exception:
+                    pass
+                
+                # Execute via handler
+                try:
+                    result = handler.execute(ctx)
+                    
+                    # Validate (unless skip_validation)
+                    if not result.skip_validation:
+                        is_valid = handler.validate(result.data, ctx)
+                        if not is_valid:
+                            # Use fallback
+                            result = handler.fallback(ctx, error=None)
+                    
+                    # Normalize
+                    normalized = handler.normalize(result.data)
+                    
+                    # Convert to final dict
+                    return result.to_dict() if isinstance(result, CardResult) else normalized
+                    
+                except Exception as handler_exc:
+                    # Handler execution failed, use fallback
+                    try:
+                        result = handler.fallback(ctx, error=handler_exc)
+                        return result.to_dict()
+                    except Exception:
+                        # Fallback also failed, fall through to legacy code
+                        pass
+        
+        # FALLBACK: Use legacy execute_card logic below
         delta_emitter = None
         stream_spec = get_stream_spec(str(source or ""), str(card.card_type))
         if emit_deltas and self._event_store and card.id is not None and stream_spec:

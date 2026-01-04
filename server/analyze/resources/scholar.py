@@ -1,4 +1,5 @@
 from __future__ import annotations
+from server.analyze.meta_utils import ensure_meta
 
 import os
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -87,7 +88,7 @@ def run_scholar_preview(
     """
     name = str(researcher_name or scholar_id or "Unknown").strip() or "Unknown"
     _emit(progress, "preview.scholar", "Scholar preview ready", {"name": name, "scholar_id": scholar_id})
-    return {"researcher": {"name": name, "scholar_id": scholar_id}, "publication_stats": {}}
+    return ensure_meta({"researcher": {"name": name, "scholar_id": scholar_id}, "publication_stats": {}}, source="scholar_preview", preserve_empty=True)
 
 
 def run_scholar_page0(
@@ -132,7 +133,7 @@ def run_scholar_page0(
     avatar_url = get_random_avatar()
     description = get_random_description(name) if name else "A brilliant researcher exploring the frontiers of knowledge."
 
-    report = {
+    report = ensure_meta({
         "researcher": {
             "name": name,
             "abbreviated_name": author_data.get("abbreviated_name", ""),
@@ -149,7 +150,7 @@ def run_scholar_page0(
             "description": description,
         },
         "publication_stats": pub_stats,
-    }
+    }, source="scholar_page0", preserve_empty=True)
     return report
 
 
