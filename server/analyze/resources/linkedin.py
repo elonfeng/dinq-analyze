@@ -905,6 +905,119 @@ def run_linkedin_enrich_bundle(*, raw_report: Dict[str, Any], progress: Optional
     life_well_being = profile.get("life_well_being") if isinstance(profile.get("life_well_being"), dict) else {}
     role_model = profile.get("role_model") if isinstance(profile.get("role_model"), dict) else {}
 
+    def _is_placeholder_text(value: Any) -> bool:
+        s = str(value or "").strip()
+        if not s:
+            return True
+        lowered = s.lower()
+        if lowered in ("n/a", "na", "none", "unknown"):
+            return True
+        if "not available" in lowered or "unavailable" in lowered:
+            return True
+        if lowered.startswith("no ") and (" available" in lowered or lowered.endswith(" available")):
+            return True
+        if lowered.startswith("no ") and lowered.endswith(" found"):
+            return True
+        return False
+
+    def _clean_str_list(value: Any, *, limit: int) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            s = str(item or "").strip()
+            if not s or _is_placeholder_text(s):
+                continue
+            key = s.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s[:200])
+            if len(out) >= int(limit):
+                break
+        return out
+
+    def _normalize_actions(value: Any) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        out: list[dict] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            emoji = str(item.get("emoji") or "").strip()
+            phrase = str(item.get("phrase") or "").strip()
+            if not phrase or _is_placeholder_text(phrase):
+                continue
+            if not emoji:
+                emoji = "✨"
+            out.append({"emoji": emoji, "phrase": phrase[:200]})
+            if len(out) >= 3:
+                break
+        return out
+
+    def _dedup_actions(items: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+        for a in items:
+            phrase = str(a.get("phrase") or "").strip()
+            if not phrase:
+                continue
+            key = phrase.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(a)
+            if len(out) >= 3:
+                break
+        return out
+
+    # Normalize colleagues_view. Do not fabricate defaults, but preserve schema for UI.
+    if not isinstance(colleagues_view, dict):
+        colleagues_view = {}
+    highlights = _clean_str_list(colleagues_view.get("highlights"), limit=6)
+    improvements = _clean_str_list(colleagues_view.get("areas_for_improvement"), limit=6)
+    colleagues_view = {"highlights": highlights, "areas_for_improvement": improvements}
+    if not highlights or not improvements:
+        colleagues_view["_meta"] = {
+            "fallback": True,
+            "code": "unavailable",
+            "preserve_empty": True,
+            "missing": [k for k, v in (("highlights", highlights), ("areas_for_improvement", improvements)) if not v],
+        }
+
+    # Normalize life_well_being. Preserve schema for UI when data is missing.
+    if not isinstance(life_well_being, dict):
+        life_well_being = {}
+    ls = life_well_being.get("life_suggestion") if isinstance(life_well_being.get("life_suggestion"), dict) else {}
+    health = life_well_being.get("health") if isinstance(life_well_being.get("health"), dict) else {}
+    ls_advice = str(ls.get("advice") or "").strip()
+    h_advice = str(health.get("advice") or "").strip()
+    if _is_placeholder_text(ls_advice):
+        ls_advice = ""
+    if _is_placeholder_text(h_advice):
+        h_advice = ""
+    ls_actions = _dedup_actions(_normalize_actions(ls.get("actions")))
+    h_actions = _dedup_actions(_normalize_actions(health.get("actions")))
+    life_well_being = {
+        "life_suggestion": {"advice": ls_advice, "actions": ls_actions},
+        "health": {"advice": h_advice, "actions": h_actions},
+    }
+    if not (ls_advice or ls_actions) or not (h_advice or h_actions):
+        life_well_being["_meta"] = {
+            "fallback": True,
+            "code": "unavailable",
+            "preserve_empty": True,
+            "missing": [
+                k
+                for k, ok in (
+                    ("life_suggestion", bool(ls_advice or ls_actions)),
+                    ("health", bool(h_advice or h_actions)),
+                )
+                if not ok
+            ],
+        }
+
     about_s = str(profile.get("about") or "").strip()
     tags_raw = profile.get("personal_tags") if isinstance(profile.get("personal_tags"), list) else []
     tags: list[str] = []

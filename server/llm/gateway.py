@@ -38,14 +38,14 @@ _BUILTIN_TASK_ROUTES: dict[str, str] = {
     "linkedin_roast": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
     # Strict JSON bundles: Groq primary + Gemini Flash hedge for schema stability.
     "linkedin_enrich_bundle": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
-    # Researcher roast: prefer low-TTFB OpenRouter Flash-Lite for streaming UX; Groq remains as hedge for p95.
-    "researcher_evaluation": "google/gemini-2.5-flash-lite,groq:llama-3.1-8b-instant",
+    # Researcher evaluation: Groq primary; OpenRouter fallback only when needed.
+    "researcher_evaluation": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash-lite",
 }
 
-_BUILTIN_HEDGE_TASKS: set[str] = {
-    # Non-JSON tasks that benefit from racing providers for lower p95.
-    "researcher_evaluation",
-}
+# Intentionally empty by default: hedging races providers and increases OpenRouter usage.
+# Enable per-task hedging explicitly via env when needed:
+#   DINQ_LLM_TASK_POLICY_<TASK>=hedge
+_BUILTIN_HEDGE_TASKS: set[str] = set()
 
 
 @dataclass(frozen=True)
