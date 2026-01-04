@@ -109,7 +109,7 @@ class CardHandler(ABC):
     # Subclasses must set these
     source: str = ""
     card_type: str = ""
-    version: str = "1"  # Bump when handler logic changes to invalidate cache
+    version: str = "2"  # Bump when handler plumbing changes to invalidate cache
     
     @abstractmethod
     def execute(self, ctx: ExecutionContext) -> CardResult:

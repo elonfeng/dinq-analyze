@@ -511,27 +511,35 @@ def _github_repos(data: Any, ctx: GateContext) -> GateDecision:
     if not has_any_repo:
         return GateDecision(action="retry", normalized=normalized, issue=GateIssue(code="missing_repos", message="Missing GitHub repos summary", retryable=True))
 
-    # If user has PRs, MVP PR should exist.
-    pr_total = 0
-    user = None
-    if isinstance(ctx.full_report, dict):
-        user = ctx.full_report.get("user")
-    if not isinstance(user, dict):
-        user = _as_dict(ctx.artifacts.get("resource.github.data")).get("user") if isinstance(ctx.artifacts.get("resource.github.data"), dict) else None
-    if isinstance(user, dict):
-        prs = user.get("pullRequests")
-        if isinstance(prs, dict):
-            try:
-                pr_total = int(prs.get("totalCount") or 0)
-            except Exception:
-                pr_total = 0
+    # MVP PR is optional (upstream allows null); never fail the repos card because it's missing.
+    # Instead, attach meta so the UI/debugging can see why it's empty.
+    if not normalized.get("most_valuable_pull_request"):
+        pr_total = 0
+        user = None
+        if isinstance(ctx.full_report, dict):
+            user = ctx.full_report.get("user")
+        if not isinstance(user, dict):
+            user = _as_dict(ctx.artifacts.get("resource.github.data")).get("user") if isinstance(ctx.artifacts.get("resource.github.data"), dict) else None
+        if isinstance(user, dict):
+            prs = user.get("pullRequests")
+            if isinstance(prs, dict):
+                try:
+                    pr_total = int(prs.get("totalCount") or 0)
+                except Exception:
+                    pr_total = 0
 
-    if pr_total > 0 and not normalized.get("most_valuable_pull_request"):
-        return GateDecision(
-            action="retry",
-            normalized=normalized,
-            issue=GateIssue(code="missing_mvp_pr", message="Missing most valuable pull request", retryable=True, details={"pull_requests_total": pr_total}),
+        meta_existing = normalized.get("_meta")
+        meta: Dict[str, Any] = meta_existing if isinstance(meta_existing, dict) else {}
+        meta = dict(meta)
+        meta.update(
+            {
+                "fallback": True,
+                "code": "missing_mvp_pr",
+                "missing": ["most_valuable_pull_request"],
+                "details": {"pull_requests_total": pr_total},
+            }
         )
+        normalized["_meta"] = meta
 
     return GateDecision(action="accept", normalized=normalized)
 
@@ -586,30 +594,44 @@ def _github_role_model(data: Any, ctx: GateContext) -> GateDecision:
 
 
 def _github_roast(data: Any, ctx: GateContext) -> GateDecision:
-    if _is_nonempty_str(data):
-        return GateDecision(action="accept", normalized=str(data).strip())
+    roast_text = ""
+    if isinstance(data, dict):
+        roast_text = str(data.get("roast") or "").strip()
+    else:
+        roast_text = str(data or "").strip()
 
-    payload = _as_dict(data)
-    roast = payload.get("roast")
-    if _is_nonempty_str(roast):
-        return GateDecision(action="accept", normalized=str(roast).strip())
+    if roast_text:
+        return GateDecision(action="accept", normalized={"roast": roast_text})
 
-    return GateDecision(action="retry", normalized=str(roast or "").strip(), issue=GateIssue(code="empty_roast", message="Missing roast text", retryable=True))
+    # Keep schema stable while retrying.
+    return GateDecision(
+        action="retry",
+        normalized={"roast": None},
+        issue=GateIssue(code="empty_roast", message="Missing roast text", retryable=True),
+    )
 
 
 def _github_summary(data: Any, ctx: GateContext) -> GateDecision:
     payload = _as_dict(data)
-    valuation = payload.get("valuation_and_level") if isinstance(payload.get("valuation_and_level"), dict) else payload
+
+    valuation = payload.get("valuation_and_level")
     if not isinstance(valuation, dict):
-        valuation = {}
+        # Backward-compat: some older payloads stored only the valuation dict.
+        valuation = dict(payload) if payload else {}
+        payload = {"valuation_and_level": valuation, "description": ""}
+
+    normalized = {
+        "valuation_and_level": valuation,
+        "description": str(payload.get("description") or "").strip(),
+    }
 
     level = str(valuation.get("level") or "").strip()
     if level:
-        return GateDecision(action="accept", normalized=valuation)
+        return GateDecision(action="accept", normalized=normalized)
 
     return GateDecision(
         action="retry",
-        normalized=valuation,
+        normalized=normalized,
         issue=GateIssue(code="missing_level", message="Missing GitHub valuation level", retryable=True),
     )
 

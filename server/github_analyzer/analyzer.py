@@ -3,6 +3,7 @@ import json
 import asyncio
 import math
 import logging
+import ast
 from datetime import datetime, timezone
 import random
 import re
@@ -161,12 +162,60 @@ class GitHubAnalyzer:
         self.dev_pioneers_data = self.dev_pioneers_df.to_dict(orient="records")
 
     def load_json(self, result: str, default_value: Any) -> Any:
-        """解析 JSON 响应"""
-        try:
-            result = json.loads(result.lstrip("```json").rstrip("```"))
-        except Exception:
-            result = default_value
-        return result
+        """Parse JSON (or Python-ish JSON) from an LLM response safely."""
+
+        text = str(result or "").strip()
+        if not text:
+            return default_value
+
+        # Strip ```json fences (strict prefix/suffix, not char-class lstrip).
+        m = re.match(r"^```(?:json)?\\s*(.*?)\\s*```\\s*$", text, flags=re.IGNORECASE | re.DOTALL)
+        if m:
+            text = str(m.group(1) or "").strip()
+
+        # Extract the largest bracketed payload when the model adds prose.
+        def _extract_bracketed(s: str) -> str:
+            t = str(s or "").strip()
+            if not t:
+                return ""
+            candidates: list[str] = []
+            for open_ch, close_ch in (("{", "}"), ("[", "]")):
+                start = t.find(open_ch)
+                end = t.rfind(close_ch)
+                if 0 <= start < end:
+                    candidates.append(t[start : end + 1])
+            return max(candidates, key=len) if candidates else t
+
+        extracted = _extract_bracketed(text)
+
+        def _ast_parse(s: str) -> Any:
+            t = str(s or "").strip()
+            if not t:
+                return None
+            # Convert common JSON literals so ast.literal_eval can handle them.
+            t = re.sub(r"\\bnull\\b", "None", t, flags=re.IGNORECASE)
+            t = re.sub(r"\\btrue\\b", "True", t, flags=re.IGNORECASE)
+            t = re.sub(r"\\bfalse\\b", "False", t, flags=re.IGNORECASE)
+            try:
+                return ast.literal_eval(t)
+            except Exception:
+                return None
+
+        for candidate in (text, extracted):
+            try:
+                return json.loads(candidate)
+            except Exception:
+                pass
+            try:
+                repaired = repair_json(candidate)
+                return json.loads(repaired)
+            except Exception:
+                pass
+            obj = _ast_parse(candidate)
+            if isinstance(obj, (dict, list)):
+                return obj
+
+        return default_value
 
     def fetch_page(self, url: str) -> str:
         """获取网页内容"""

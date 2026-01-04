@@ -38,6 +38,8 @@ _BUILTIN_TASK_ROUTES: dict[str, str] = {
     "linkedin_roast": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
     # Strict JSON bundles: Groq primary + Gemini Flash hedge for schema stability.
     "linkedin_enrich_bundle": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
+    # GitHub analyzer: Groq primary, OpenRouter fallback (schema stability hedge).
+    "github_ai": "groq:llama-3.1-8b-instant,openrouter:google/gemini-2.5-flash",
     # Researcher evaluation: Groq primary; OpenRouter fallback only when needed.
     "researcher_evaluation": "groq:llama-3.1-8b-instant,google/gemini-2.5-flash-lite",
 }

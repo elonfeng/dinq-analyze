@@ -16,13 +16,14 @@ import requests
 from server.github_analyzer.github_client import GithubClient
 from server.github_analyzer.analyzer import DESC_PRESETS, parse_github_datetime
 from server.github_analyzer.github_queries import MostPullRequestRepositoriesQuery
+from server.analyze.meta_utils import ensure_meta
 from server.utils.timing import elapsed_ms, now_perf
 
 
 ProgressFn = Callable[[str, str, Optional[Dict[str, Any]]], None]
 
 
-_LEVEL_RE = re.compile(r"^L\\s*(\\d{1,2})$", flags=re.IGNORECASE)
+_LEVEL_RE = re.compile(r"^L\s*(\d{1,2})(\+)?$", flags=re.IGNORECASE)
 
 
 def _coerce_level(value: Any) -> str:
@@ -36,7 +37,7 @@ def _coerce_level(value: Any) -> str:
             n = int(m.group(1))
         except Exception:
             return ""
-        return f"L{n}"
+        return f"L{n}{'+' if m.group(2) else ''}"
 
     lowered = raw.lower()
     # Best-effort map from descriptive labels to the internal L-level scale.
