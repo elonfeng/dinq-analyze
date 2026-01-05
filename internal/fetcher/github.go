@@ -1,0 +1,388 @@
+package fetcher
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+const githubGraphQLEndpoint = "https://api.github.com/graphql"
+
+// GitHubClient GitHub GraphQL API客户端
+type GitHubClient struct {
+	token      string
+	httpClient *http.Client
+}
+
+// NewGitHubClient 创建GitHub客户端
+func NewGitHubClient(token string) *GitHubClient {
+	return &GitHubClient{
+		token: token,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// GraphQLRequest GraphQL请求结构
+type GraphQLRequest struct {
+	Query     string                 `json:"query"`
+	Variables map[string]interface{} `json:"variables,omitempty"`
+}
+
+// GraphQLResponse GraphQL响应结构
+type GraphQLResponse struct {
+	Data   json.RawMessage `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors,omitempty"`
+}
+
+// query 执行GraphQL查询
+func (c *GitHubClient) query(ctx context.Context, query string, variables map[string]interface{}) (json.RawMessage, error) {
+	reqBody := GraphQLRequest{
+		Query:     query,
+		Variables: variables,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", githubGraphQLEndpoint, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API error: %s - %s", resp.Status, string(body))
+	}
+
+	var gqlResp GraphQLResponse
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+	}
+
+	return gqlResp.Data, nil
+}
+
+// GitHubUserData GitHub用户数据（从bundle查询返回）
+type GitHubUserData struct {
+	ID           string                   `json:"id"`
+	Name         string                   `json:"name"`
+	Login        string                   `json:"login"`
+	CreatedAt    string                   `json:"createdAt"`
+	Bio          string                   `json:"bio"`
+	AvatarURL    string                   `json:"avatarUrl"`
+	URL          string                   `json:"url"`
+	Followers    struct{ TotalCount int } `json:"followers"`
+	Following    struct{ TotalCount int } `json:"following"`
+	Issues       struct{ TotalCount int } `json:"issues"`
+	PullRequests struct{ TotalCount int } `json:"pullRequests"`
+	Repositories struct{ TotalCount int } `json:"repositories"`
+	TopRepos     struct {
+		Nodes []GitHubRepo `json:"nodes"`
+	} `json:"topRepos"`
+	PullRequestsTop struct {
+		TotalCount int            `json:"totalCount"`
+		Nodes      []GitHubPRNode `json:"nodes"`
+	} `json:"pullRequestsTop"`
+	ContributionsCollection struct {
+		ContributionCalendar struct {
+			Weeks []struct {
+				ContributionDays []struct {
+					Date              string `json:"date"`
+					ContributionCount int    `json:"contributionCount"`
+				} `json:"contributionDays"`
+			} `json:"weeks"`
+		} `json:"contributionCalendar"`
+		PRContributions []struct {
+			Contributions struct{ TotalCount int } `json:"contributions"`
+			Repository    GitHubRepo               `json:"repository"`
+		} `json:"pullRequestContributionsByRepository"`
+	} `json:"contributionsCollection"`
+}
+
+// GitHubRepo GitHub仓库信息
+type GitHubRepo struct {
+	Name            string `json:"name"`
+	NameWithOwner   string `json:"nameWithOwner"`
+	URL             string `json:"url"`
+	Description     string `json:"description"`
+	StargazerCount  int    `json:"stargazerCount"`
+	ForkCount       int    `json:"forkCount"`
+	PrimaryLanguage struct {
+		Name string `json:"name"`
+	} `json:"primaryLanguage"`
+	RepositoryTopics struct {
+		Nodes []struct {
+			Topic struct {
+				Name string `json:"name"`
+			} `json:"topic"`
+		} `json:"nodes"`
+	} `json:"repositoryTopics"`
+	Owner struct {
+		AvatarURL string `json:"avatarUrl"`
+	} `json:"owner"`
+}
+
+// GitHubPRNode GitHub PR节点
+type GitHubPRNode struct {
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	Additions  int    `json:"additions"`
+	Deletions  int    `json:"deletions"`
+	Repository struct {
+		NameWithOwner  string `json:"nameWithOwner"`
+		URL            string `json:"url"`
+		StargazerCount int    `json:"stargazerCount"`
+		ForkCount      int    `json:"forkCount"`
+		Languages      struct {
+			Edges []struct {
+				Size int `json:"size"`
+				Node struct {
+					Name string `json:"name"`
+				} `json:"node"`
+			} `json:"edges"`
+		} `json:"languages"`
+	} `json:"repository"`
+}
+
+const bundleQuery = `
+query($login: String!, $from: DateTime!, $to: DateTime!) {
+    user(login: $login) {
+        id
+        name
+        login
+        createdAt
+        bio
+        avatarUrl
+        url
+        followers { totalCount }
+        following { totalCount }
+        issues { totalCount }
+        pullRequests { totalCount }
+        repositories(isFork: false, ownerAffiliations: [OWNER]) { totalCount }
+
+        topRepos: repositories(
+            isFork: false,
+            ownerAffiliations: [OWNER],
+            first: 50,
+            orderBy: { field: STARGAZERS, direction: DESC }
+        ) {
+            nodes {
+                name
+                nameWithOwner
+                url
+                description
+                owner { avatarUrl }
+                stargazerCount
+                forkCount
+                primaryLanguage { name }
+                repositoryTopics(first: 5) {
+                    nodes { topic { name } }
+                }
+            }
+        }
+
+        pullRequestsTop: pullRequests(first: 50, orderBy: { field: COMMENTS, direction: DESC }) {
+            totalCount
+            nodes {
+                url
+                title
+                additions
+                deletions
+                repository {
+                    nameWithOwner
+                    url
+                    stargazerCount
+                    forkCount
+                    languages(first: 3, orderBy: { field: SIZE, direction: DESC }) {
+                        edges {
+                            size
+                            node { name }
+                        }
+                    }
+                }
+            }
+        }
+
+        contributionsCollection(from: $from, to: $to) {
+            contributionCalendar {
+                weeks {
+                    contributionDays {
+                        date
+                        contributionCount
+                    }
+                }
+            }
+            pullRequestContributionsByRepository(maxRepositories: 10) {
+                contributions(orderBy: { direction: DESC }) {
+                    totalCount
+                }
+                repository {
+                    url
+                    name
+                    description
+                    owner { avatarUrl }
+                    stargazerCount
+                }
+            }
+        }
+    }
+}
+`
+
+// FetchBundle 获取GitHub用户数据bundle（单次请求获取大部分数据）
+func (c *GitHubClient) FetchBundle(ctx context.Context, login string) (*GitHubUserData, error) {
+	now := time.Now().UTC()
+	oneYearAgo := now.AddDate(-1, 0, 0)
+
+	variables := map[string]interface{}{
+		"login": login,
+		"from":  oneYearAgo.Format(time.RFC3339),
+		"to":    now.Format(time.RFC3339),
+	}
+
+	data, err := c.query(ctx, bundleQuery, variables)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		User *GitHubUserData `json:"user"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal user data: %w", err)
+	}
+
+	if result.User == nil {
+		return nil, fmt.Errorf("user not found: %s", login)
+	}
+
+	return result.User, nil
+}
+
+const pullRequestsQuery = `
+query($login: String!) {
+    user(login: $login) {
+        pullRequests(first: 50, orderBy: { field: COMMENTS, direction: DESC }) {
+            totalCount
+            nodes {
+                url
+                title
+                additions
+                deletions
+                repository {
+                    nameWithOwner
+                    url
+                    stargazerCount
+                    forkCount
+                    languages(first: 3, orderBy: { field: SIZE, direction: DESC }) {
+                        edges {
+                            size
+                            node { name }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+`
+
+// PRStats Pull Request统计
+type PRStats struct {
+	TotalCount int
+	Nodes      []GitHubPRNode
+	Mutations  struct {
+		Additions int
+		Deletions int
+		Languages map[string]int
+	}
+}
+
+// FetchPullRequests 获取用户PR统计
+func (c *GitHubClient) FetchPullRequests(ctx context.Context, login string) (*PRStats, error) {
+	variables := map[string]interface{}{
+		"login": login,
+	}
+
+	data, err := c.query(ctx, pullRequestsQuery, variables)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		User struct {
+			PullRequests struct {
+				TotalCount int            `json:"totalCount"`
+				Nodes      []GitHubPRNode `json:"nodes"`
+			} `json:"pullRequests"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal PR data: %w", err)
+	}
+
+	stats := &PRStats{
+		TotalCount: result.User.PullRequests.TotalCount,
+		Nodes:      result.User.PullRequests.Nodes,
+	}
+
+	// 计算代码变更统计
+	var totalAdditions, totalDeletions int
+	languages := make(map[string]int)
+
+	for _, pr := range stats.Nodes {
+		totalAdditions += pr.Additions
+		totalDeletions += pr.Deletions
+
+		total := pr.Additions + pr.Deletions
+		var langSize int
+		for _, lang := range pr.Repository.Languages.Edges {
+			langSize += lang.Size
+		}
+		if langSize > 0 {
+			for _, lang := range pr.Repository.Languages.Edges {
+				pct := float64(lang.Size) / float64(langSize)
+				languages[lang.Node.Name] += int(pct * float64(total))
+			}
+		}
+	}
+
+	count := len(stats.Nodes)
+	if count > 0 {
+		stats.Mutations.Additions = totalAdditions / count * stats.TotalCount
+		stats.Mutations.Deletions = totalDeletions / count * stats.TotalCount
+		for name := range languages {
+			languages[name] = languages[name] / count * stats.TotalCount
+		}
+	}
+	stats.Mutations.Languages = languages
+
+	return stats, nil
+}
