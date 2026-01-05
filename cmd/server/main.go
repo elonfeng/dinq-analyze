@@ -89,9 +89,9 @@ func main() {
 	// 设置路由
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", scholarHandler.Health)
-	mux.HandleFunc("/api/analyze/scholar/sse", scholarHandler.AnalyzeSSE)
-	mux.HandleFunc("/api/analyze/github/sse", githubHandler.AnalyzeSSE)
-	mux.HandleFunc("/api/analyze/linkedin/sse", linkedinHandler.AnalyzeSSE)
+	mux.HandleFunc("POST /api/analyze/scholar", scholarHandler.AnalyzeSSE)
+	mux.HandleFunc("POST /api/analyze/github", githubHandler.AnalyzeSSE)
+	mux.HandleFunc("POST /api/analyze/linkedin", linkedinHandler.AnalyzeSSE)
 
 	// CORS中间件
 	corsHandler := corsMiddleware(mux)
