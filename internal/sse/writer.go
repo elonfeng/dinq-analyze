@@ -52,7 +52,14 @@ func (s *Writer) heartbeat() {
 		select {
 		case <-ticker.C:
 			s.mu.Lock()
-			fmt.Fprint(s.w, ": keepalive\n\n")
+			// 发送心跳消息，保持当前状态但标记为heartbeat
+			heartbeat := map[string]interface{}{
+				"status":         "heartbeat",
+				"overall":        s.state.Overall,
+				"current_action": s.state.CurrentAction,
+			}
+			data, _ := json.Marshal(heartbeat)
+			fmt.Fprintf(s.w, "data: %s\n\n", data)
 			s.flusher.Flush()
 			s.mu.Unlock()
 		case <-s.stopHeart:
@@ -231,7 +238,13 @@ func (g *GitHubWriter) heartbeat() {
 		select {
 		case <-ticker.C:
 			g.mu.Lock()
-			fmt.Fprint(g.w, ": keepalive\n\n")
+			heartbeat := map[string]interface{}{
+				"status":         "heartbeat",
+				"overall":        g.state.Overall,
+				"current_action": g.state.CurrentAction,
+			}
+			data, _ := json.Marshal(heartbeat)
+			fmt.Fprintf(g.w, "data: %s\n\n", data)
 			g.flusher.Flush()
 			g.mu.Unlock()
 		case <-g.stopHeart:
@@ -384,7 +397,13 @@ func (l *LinkedInWriter) heartbeat() {
 		select {
 		case <-ticker.C:
 			l.mu.Lock()
-			fmt.Fprint(l.w, ": keepalive\n\n")
+			heartbeat := map[string]interface{}{
+				"status":         "heartbeat",
+				"overall":        l.state.Overall,
+				"current_action": l.state.CurrentAction,
+			}
+			data, _ := json.Marshal(heartbeat)
+			fmt.Fprintf(l.w, "data: %s\n\n", data)
 			l.flusher.Flush()
 			l.mu.Unlock()
 		case <-l.stopHeart:
