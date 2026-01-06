@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -214,6 +215,7 @@ func filterBySimilarity(candidates []ScholarCandidate, query string) []ScholarCa
 	}
 
 	query = strings.ToLower(strings.TrimSpace(query))
+	log.Printf("[Scholar Search] Query: %q, candidates count: %d", query, len(candidates))
 
 	type scored struct {
 		candidate ScholarCandidate
@@ -227,6 +229,7 @@ func filterBySimilarity(candidates []ScholarCandidate, query string) []ScholarCa
 
 		score := calculateSimilarity(query, name, content)
 		scoredCandidates = append(scoredCandidates, scored{c, score})
+		log.Printf("[Scholar Search] Candidate: %q, score: %.2f", c.Name, score)
 	}
 
 	// 按分数排序（高到低）
@@ -238,122 +241,203 @@ func filterBySimilarity(candidates []ScholarCandidate, query string) []ScholarCa
 		}
 	}
 
-	// 过滤相似度太低的（阈值0.3），但至少保留3个
-	const minThreshold = 0.3
-	const minKeep = 3
+	// 过滤相似度太低的（阈值0.7）
+	const minThreshold = 0.7
 
 	var filtered []ScholarCandidate
-	for i, sc := range scoredCandidates {
-		if sc.score >= minThreshold || i < minKeep {
+	for _, sc := range scoredCandidates {
+		if sc.score >= minThreshold {
 			filtered = append(filtered, sc.candidate)
+		} else {
+			log.Printf("[Scholar Search] Filtered out: %q (score: %.2f < %.2f)", sc.candidate.Name, sc.score, minThreshold)
 		}
 	}
 
+	log.Printf("[Scholar Search] After filter: %d candidates remain", len(filtered))
 	return filtered
 }
 
 // calculateSimilarity 计算查询与候选人的相似度
 func calculateSimilarity(query, name, content string) float64 {
-	var score float64
+	queryNoSpace := strings.ReplaceAll(query, " ", "")
+	nameNoSpace := strings.ReplaceAll(name, " ", "")
 
-	// 1. 名字完全匹配
-	if name == query {
-		score += 1.0
-	} else if strings.Contains(name, query) || strings.Contains(query, name) {
-		// 名字部分包含
-		score += 0.7
-	} else {
-		// 计算编辑距离相似度
-		score += stringSimilarity(query, name) * 0.5
+	var bestScore float64
+
+	// 方法1: 直接比较（去空格后）
+	bestScore = directSimilarity(queryNoSpace, nameNoSpace)
+
+	// 方法2: 按空格拆分比较（处理名字顺序颠倒、额外关键词）
+	splitScore := splitBasedSimilarity(query, name)
+	if splitScore > bestScore {
+		bestScore = splitScore
 	}
 
-	// 2. content包含查询
-	if strings.Contains(content, query) {
-		score += 0.3
+	// 方法3: 名字部分排列组合匹配（处理 "wangqiang" vs "qiang wang"）
+	nameParts := strings.Fields(name)
+	if len(nameParts) >= 2 {
+		// 生成名字的各种组合形式
+		combinations := generateNameCombinations(nameParts)
+		for _, combo := range combinations {
+			// 检查query是否包含这个组合
+			if strings.Contains(queryNoSpace, combo) {
+				bestScore = 1.0
+				break
+			}
+			// Levenshtein相似度
+			sim := levenshteinSimilarity(queryNoSpace, combo)
+			if sim > bestScore {
+				bestScore = sim
+			}
+			// 滑动窗口（query更长时）
+			if len(queryNoSpace) > len(combo) {
+				windowSize := len(combo)
+				for i := 0; i <= len(queryNoSpace)-windowSize; i++ {
+					window := queryNoSpace[i : i+windowSize]
+					windowSim := levenshteinSimilarity(combo, window)
+					if windowSim > bestScore {
+						bestScore = windowSim
+					}
+				}
+			}
+		}
 	}
 
-	return score
+	// content 包含 name 加分
+	if strings.Contains(content, name) || strings.Contains(content, nameNoSpace) {
+		bestScore += 0.2
+	}
+
+	if bestScore > 1.0 {
+		bestScore = 1.0
+	}
+	return bestScore
 }
 
-// stringSimilarity 使用Jaro-Winkler相似度的简化版本
-func stringSimilarity(s1, s2 string) float64 {
-	if s1 == s2 {
+// directSimilarity 直接比较两个字符串的相似度
+func directSimilarity(a, b string) float64 {
+	if strings.Contains(a, b) {
 		return 1.0
 	}
-	if len(s1) == 0 || len(s2) == 0 {
-		return 0.0
+	if strings.Contains(b, a) {
+		return 0.9
+	}
+	return levenshteinSimilarity(a, b)
+}
+
+// splitBasedSimilarity 基于空格拆分的相似度计算
+func splitBasedSimilarity(query, name string) float64 {
+	queryParts := strings.Fields(query)
+	nameParts := strings.Fields(name)
+
+	if len(queryParts) == 0 || len(nameParts) == 0 {
+		return 0
 	}
 
-	// 计算共同前缀长度
-	prefixLen := 0
-	maxPrefix := 4
-	if len(s1) < maxPrefix {
-		maxPrefix = len(s1)
-	}
-	if len(s2) < maxPrefix {
-		maxPrefix = len(s2)
-	}
-	for i := 0; i < maxPrefix; i++ {
-		if s1[i] == s2[i] {
-			prefixLen++
-		} else {
-			break
-		}
-	}
-
-	// 计算共同字符
-	r1 := []rune(s1)
-	r2 := []rune(s2)
-	matchWindow := max(len(r1), len(r2))/2 - 1
-	if matchWindow < 0 {
-		matchWindow = 0
-	}
-
-	matched1 := make([]bool, len(r1))
-	matched2 := make([]bool, len(r2))
-	matches := 0
-
-	for i := range r1 {
-		start := max(0, i-matchWindow)
-		end := min(len(r2), i+matchWindow+1)
-		for j := start; j < end; j++ {
-			if matched2[j] || r1[i] != r2[j] {
-				continue
+	// 计算name的每个部分在query中的最佳匹配得分
+	var totalScore float64
+	for _, np := range nameParts {
+		np = strings.ToLower(np)
+		bestPartScore := 0.0
+		for _, qp := range queryParts {
+			qp = strings.ToLower(qp)
+			// 完全匹配
+			if qp == np {
+				bestPartScore = 1.0
+				break
 			}
-			matched1[i] = true
-			matched2[j] = true
-			matches++
-			break
+			// 包含关系
+			if strings.Contains(qp, np) || strings.Contains(np, qp) {
+				if 0.9 > bestPartScore {
+					bestPartScore = 0.9
+				}
+			}
+			// Levenshtein
+			sim := levenshteinSimilarity(qp, np)
+			if sim > bestPartScore {
+				bestPartScore = sim
+			}
+		}
+		totalScore += bestPartScore
+	}
+
+	return totalScore / float64(len(nameParts))
+}
+
+// generateNameCombinations 生成名字部分的各种组合
+func generateNameCombinations(parts []string) []string {
+	if len(parts) == 0 {
+		return nil
+	}
+	if len(parts) == 1 {
+		return []string{strings.ToLower(parts[0])}
+	}
+
+	// 对于两个部分，生成正序和倒序
+	if len(parts) == 2 {
+		p0 := strings.ToLower(parts[0])
+		p1 := strings.ToLower(parts[1])
+		return []string{
+			p0 + p1, // firstname+lastname
+			p1 + p0, // lastname+firstname
 		}
 	}
 
-	if matches == 0 {
+	// 对于更多部分，只生成正序和完全倒序
+	var forward, backward string
+	for i := 0; i < len(parts); i++ {
+		forward += strings.ToLower(parts[i])
+		backward += strings.ToLower(parts[len(parts)-1-i])
+	}
+	return []string{forward, backward}
+}
+
+// levenshteinSimilarity 计算 Levenshtein 相似度 (0-1)
+func levenshteinSimilarity(a, b string) float64 {
+	if a == b {
+		return 1.0
+	}
+	if len(a) == 0 || len(b) == 0 {
 		return 0.0
 	}
 
-	// Jaro相似度
-	t := 0
-	j := 0
-	for i := range r1 {
-		if !matched1[i] {
-			continue
-		}
-		for !matched2[j] {
-			j++
-		}
-		if r1[i] != r2[j] {
-			t++
-		}
-		j++
+	dist := levenshteinDistance(a, b)
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
 	}
-	t /= 2
+	return 1.0 - float64(dist)/float64(maxLen)
+}
 
-	jaro := (float64(matches)/float64(len(r1)) +
-		float64(matches)/float64(len(r2)) +
-		float64(matches-t)/float64(matches)) / 3.0
+// levenshteinDistance 计算编辑距离
+func levenshteinDistance(a, b string) int {
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
 
-	// Jaro-Winkler
-	return jaro + float64(prefixLen)*0.1*(1-jaro)
+	// 创建距离矩阵
+	d := make([][]int, len(a)+1)
+	for i := range d {
+		d[i] = make([]int, len(b)+1)
+		d[i][0] = i
+	}
+	for j := range d[0] {
+		d[0][j] = j
+	}
+
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			d[i][j] = min(d[i-1][j]+1, min(d[i][j-1]+1, d[i-1][j-1]+cost))
+		}
+	}
+	return d[len(a)][len(b)]
 }
 
 // containsChinese 检测字符串是否包含中文

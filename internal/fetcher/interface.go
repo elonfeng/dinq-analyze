@@ -20,6 +20,7 @@ type LLMClient interface {
 	GenerateRoleModel(ctx context.Context, profile ProfileData) (*RoleModelResult, error)
 	GenerateRoast(ctx context.Context, profile ProfileData) (string, error)
 	SummarizeContent(ctx context.Context, text string) (string, error)
+	SummarizePaperNews(ctx context.Context, paperTitle, rawSnippet string) (string, error)
 }
 
 // NewsResult 新闻搜索结果

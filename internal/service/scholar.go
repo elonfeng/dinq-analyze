@@ -515,10 +515,16 @@ func (s *ScholarService) searchPaperNews(ctx context.Context, paperTitle string)
 		}
 	}
 
+	// 用 LLM 总结 snippet
+	description := results[0].Snippet
+	if summarized, err := s.llmClient.SummarizePaperNews(ctx, paperTitle, results[0].Snippet); err == nil && summarized != "" {
+		description = summarized
+	}
+
 	return &model.PaperNews{
 		News:        results[0].Title,
 		Date:        results[0].Date,
-		Description: results[0].Snippet,
+		Description: description,
 		URL:         results[0].URL,
 		IsFallback:  false,
 	}

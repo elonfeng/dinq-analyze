@@ -401,6 +401,29 @@ Only output the summary, no explanations.`
 	return response, nil
 }
 
+// SummarizePaperNews 总结论文新闻/描述
+func (o *OpenRouterClient) SummarizePaperNews(ctx context.Context, paperTitle, rawSnippet string) (string, error) {
+	if rawSnippet == "" {
+		return "", nil
+	}
+
+	systemPrompt := `You summarize academic paper descriptions into clear, professional 2-3 sentence highlights.
+Keep it around 40 words. Focus on the paper's innovation and impact.
+Remove any code, citations, or formatting artifacts. Only output the summary.`
+
+	userPrompt := fmt.Sprintf(`Summarize this paper information into a clean description:
+
+Paper: %s
+Raw text: %s`, paperTitle, rawSnippet)
+
+	response, err := o.chat(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return rawSnippet, err // 失败返回原文
+	}
+
+	return strings.TrimSpace(response), nil
+}
+
 // SummarizePaper 生成论文摘要
 func (o *OpenRouterClient) SummarizePaper(ctx context.Context, title string, year int, venue string, citations int) (string, error) {
 	systemPrompt := `You craft concise, energetic academic highlights.
