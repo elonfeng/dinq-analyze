@@ -159,9 +159,8 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 	// ========== 发送 start 消息 ==========
 	w.SetAction(0, "Starting analysis...")
 
-	// ========== 立即发送初始 profile_card（只有 avatar 和 scholar_id）==========
+	// ========== 立即发送初始 profile_card（只有 avatar 和 scholar_url）==========
 	initialProfile := model.ProfileCard{
-		ScholarID:  scholarID,
 		ScholarURL: "https://scholar.google.com/citations?user=" + scholarID,
 		Avatar:     "https://scholar.googleusercontent.com/citations?view_op=view_photo&user=" + scholarID + "&citpid=2",
 	}
@@ -186,11 +185,8 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 	var paperOfYear *model.PaperOfYearCard
 	var repPaper *model.RepresentativePaperCard
 
-	// 用于传递学者名字给新闻搜索
-	scholarNameChan := make(chan string, 1)
-
-	// ========== 阶段1: 并发获取HTML和新闻 ==========
-	wg.Add(2)
+	// ========== 阶段1: 获取HTML ==========
+	wg.Add(1)
 
 	// 任务1: HTML → profile + papers + coauthors (并发获取多页)
 	go func() {
@@ -204,10 +200,8 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 			mu.Lock()
 			fetchErr = err
 			mu.Unlock()
-			scholarNameChan <- "" // 发送空名字通知新闻搜索失败
 			w.SetError(model.CardProfile, err.Error(), "Failed to fetch")
 			w.SetError(model.CardPapers, err.Error(), "Failed to fetch")
-			w.SetError(model.CardCoauthors, err.Error(), "Failed to fetch")
 			return
 		}
 
@@ -219,10 +213,8 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 			mu.Lock()
 			fetchErr = err
 			mu.Unlock()
-			scholarNameChan <- "" // 发送空名字通知新闻搜索失败
 			w.SetError(model.CardProfile, err.Error(), "Failed to parse")
 			w.SetError(model.CardPapers, err.Error(), "Failed to parse")
-			w.SetError(model.CardCoauthors, err.Error(), "Failed to parse")
 			return
 		}
 
@@ -230,23 +222,13 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 		parsedData = parsed
 		mu.Unlock()
 
-		// 发送学者名字给新闻搜索
-		scholarNameChan <- parsed.Profile.Name
-
 		// 填充3个card
 		profileCard := model.ProfileCard{
-			Name:            parsed.Profile.Name,
-			Affiliation:     parsed.Profile.Affiliation,
-			Interests:       parsed.Profile.Interests,
-			HIndex:          parsed.Profile.HIndex,
-			HIndex5y:        parsed.Profile.HIndex5y,
-			I10Index:        parsed.Profile.I10Index,
-			TotalCites:      parsed.Profile.TotalCites,
-			Citations5y:     parsed.Profile.Citations5y,
-			YearlyCitations: parsed.Profile.YearlyCitations,
-			ScholarID:       scholarID,
-			ScholarURL:      "https://scholar.google.com/citations?user=" + scholarID,
-			Avatar:          "https://scholar.googleusercontent.com/citations?view_op=view_photo&user=" + scholarID + "&citpid=2",
+			Name:        parsed.Profile.Name,
+			Affiliation: parsed.Profile.Affiliation,
+			Interests:   parsed.Profile.Interests,
+			ScholarURL:  "https://scholar.google.com/citations?user=" + scholarID,
+			Avatar:      "https://scholar.googleusercontent.com/citations?view_op=view_photo&user=" + scholarID + "&citpid=2",
 		}
 
 		// 提取合作者全名列表用于匹配
@@ -295,28 +277,19 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 			yearlyStats[p.Year]++
 		}
 		papersCard := model.PapersCard{
-			TotalPapers:    len(papers),
-			TotalCitations: totalCitations,
-			Papers:         papers,
-			YearlyStats:    yearlyStats,
-		}
-
-		coauthors := make([]model.Coauthor, 0, len(parsed.Coauthors))
-		for _, c := range parsed.Coauthors {
-			coauthors = append(coauthors, model.Coauthor{
-				Name:        c.Name,
-				ScholarID:   c.ScholarID,
-				Affiliation: c.Affiliation,
-			})
-		}
-		coauthorsCard := model.CoauthorsCard{
-			TotalCoauthors: len(coauthors),
-			Coauthors:      coauthors,
+			TotalPapers:     len(papers),
+			TotalCitations:  totalCitations,
+			HIndex:          parsed.Profile.HIndex,
+			HIndex5y:        parsed.Profile.HIndex5y,
+			I10Index:        parsed.Profile.I10Index,
+			Citations5y:     parsed.Profile.Citations5y,
+			YearlyCitations: parsed.Profile.YearlyCitations,
+			YearlyStats:     yearlyStats,
+			Papers:          papers,
 		}
 
 		w.SetCard(model.CardProfile, profileCard, "Profile loaded")
 		w.SetCard(model.CardPapers, papersCard, "Papers loaded")
-		w.SetCard(model.CardCoauthors, coauthorsCard, "Coauthors loaded")
 
 		// ========== 计算洞察数据（使用扩展后的作者名） ==========
 		w.SetAction(35, "Analyzing publication insights...")
@@ -346,39 +319,6 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 		}
 	}()
 
-	// 任务2: 新闻搜索（等待学者名字）
-	go func() {
-		defer wg.Done()
-
-		// 等待学者名字
-		scholarName := <-scholarNameChan
-		if scholarName == "" {
-			w.SetError(model.CardNews, "Scholar name not available", "News search skipped")
-			return
-		}
-
-		w.SetAction(20, "Searching news for "+scholarName+"...")
-
-		// 用学者名字搜索新闻，而不是 scholarID
-		results, err := s.searchFetcher.SearchNews(ctx, scholarName, 5)
-		if err != nil {
-			w.SetError(model.CardNews, err.Error(), "News search failed")
-			return
-		}
-
-		newsItems := make([]model.NewsItem, 0, len(results))
-		for _, n := range results {
-			newsItems = append(newsItems, model.NewsItem{
-				Title:   n.Title,
-				URL:     n.URL,
-				Source:  n.Source,
-				Date:    n.Date,
-				Snippet: n.Snippet,
-			})
-		}
-		w.SetCard(model.CardNews, model.NewsCard{Items: newsItems}, "News loaded")
-	}()
-
 	wg.Wait()
 
 	if fetchErr != nil {
@@ -386,7 +326,7 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 	}
 
 	// ========== 阶段2: 并发LLM任务 ==========
-	wg.Add(7) // paper summary + level + summary + rolemodel + roast + description + paper_news
+	wg.Add(7) // paper summary + earnings + research_style + rolemodel + roast + description + paper_news
 
 	// 用于更新profile card的description
 	var profileDescription string
@@ -448,55 +388,66 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 		w.SetCard(model.CardRepresentative, rp, "Paper news loaded")
 	}()
 
+	// 任务: 生成薪资评估
 	go func() {
 		defer wg.Done()
-		w.SetAction(55, "AI analyzing career level...")
+		w.SetAction(55, "AI analyzing earnings...")
 
 		topPapers := parsedData.Papers
 		if len(topPapers) > 10 {
 			topPapers = topPapers[:10]
 		}
 
-		result, err := s.llmClient.GenerateLevel(ctx, parsedData.Profile, topPapers)
+		result, err := s.llmClient.GenerateEarnings(ctx, parsedData.Profile, topPapers)
 		if err != nil {
-			w.SetError(model.CardLevel, err.Error(), "Level analysis failed")
+			w.SetError(model.CardEarnings, err.Error(), "Earnings analysis failed")
 			return
 		}
 
-		w.SetCard(model.CardLevel, model.LevelCard{
-			LevelCN:       result.LevelCN,
-			LevelUS:       result.LevelUS,
-			Earnings:      result.Earnings,
+		w.SetCard(model.CardEarnings, model.EarningsCard{
+			Earnings: result.Earnings,
+			LevelCN:  result.LevelCN,
+			LevelUS:  result.LevelUS,
+			Reason:   result.Justification,
+		}, "Earnings complete")
+	}()
+
+	// 任务: 生成研究风格
+	go func() {
+		defer wg.Done()
+		w.SetAction(58, "AI analyzing research style...")
+
+		topPapers := parsedData.Papers
+		if len(topPapers) > 10 {
+			topPapers = topPapers[:10]
+		}
+
+		result, err := s.llmClient.GenerateResearchStyle(ctx, parsedData.Profile, topPapers)
+		if err != nil {
+			w.SetError(model.CardResearchStyle, err.Error(), "Research style analysis failed")
+			return
+		}
+
+		w.SetCard(model.CardResearchStyle, model.ResearchStyleCard{
+			DepthVsBreadth: model.ResearchStyleDimension{
+				Score:       result.DepthVsBreadth.Score,
+				Explanation: result.DepthVsBreadth.Explanation,
+			},
+			TheoryVsPractice: model.ResearchStyleDimension{
+				Score:       result.TheoryVsPractice.Score,
+				Explanation: result.TheoryVsPractice.Explanation,
+			},
+			IndividualVsTeam: model.ResearchStyleDimension{
+				Score:       result.IndividualVsTeam.Score,
+				Explanation: result.IndividualVsTeam.Explanation,
+			},
 			Justification: result.Justification,
-			ResearchStyle: result.ResearchStyle,
-		}, "Level complete")
+		}, "Research style complete")
 	}()
 
 	go func() {
 		defer wg.Done()
-		w.SetAction(60, "AI generating summary...")
-
-		topPapers := parsedData.Papers
-		if len(topPapers) > 10 {
-			topPapers = topPapers[:10]
-		}
-
-		result, err := s.llmClient.GenerateSummary(ctx, parsedData.Profile, topPapers)
-		if err != nil {
-			w.SetError(model.CardSummary, err.Error(), "Summary failed")
-			return
-		}
-
-		w.SetCard(model.CardSummary, model.SummaryCard{
-			Summary:       result.Summary,
-			Keywords:      result.Keywords,
-			ResearchAreas: result.ResearchAreas,
-		}, "Summary complete")
-	}()
-
-	go func() {
-		defer wg.Done()
-		w.SetAction(65, "AI finding role model...")
+		w.SetAction(60, "AI finding role model...")
 
 		result, err := s.llmClient.GenerateRoleModel(ctx, parsedData.Profile)
 		if err != nil {
@@ -535,19 +486,12 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 	if profileDescription != "" {
 		// 重新构建完整的profile card并更新
 		profileCard := model.ProfileCard{
-			Name:            parsedData.Profile.Name,
-			Affiliation:     parsedData.Profile.Affiliation,
-			Interests:       parsedData.Profile.Interests,
-			HIndex:          parsedData.Profile.HIndex,
-			HIndex5y:        parsedData.Profile.HIndex5y,
-			I10Index:        parsedData.Profile.I10Index,
-			TotalCites:      parsedData.Profile.TotalCites,
-			Citations5y:     parsedData.Profile.Citations5y,
-			YearlyCitations: parsedData.Profile.YearlyCitations,
-			ScholarID:       scholarID,
-			ScholarURL:      "https://scholar.google.com/citations?user=" + scholarID,
-			Avatar:          "https://scholar.googleusercontent.com/citations?view_op=view_photo&user=" + scholarID + "&citpid=2",
-			Description:     profileDescription,
+			Name:        parsedData.Profile.Name,
+			Affiliation: parsedData.Profile.Affiliation,
+			Interests:   parsedData.Profile.Interests,
+			ScholarURL:  "https://scholar.google.com/citations?user=" + scholarID,
+			Avatar:      "https://scholar.googleusercontent.com/citations?view_op=view_photo&user=" + scholarID + "&citpid=2",
+			Description: profileDescription,
 		}
 		w.SetCard(model.CardProfile, profileCard, "Profile complete")
 	}

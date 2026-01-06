@@ -114,8 +114,8 @@ func extractJSON(response string) string {
 	return response
 }
 
-// GenerateLevel 生成职级分析
-func (o *OpenRouterClient) GenerateLevel(ctx context.Context, profile ProfileData, papers []PaperData) (*LevelResult, error) {
+// GenerateEarnings 生成薪资分析
+func (o *OpenRouterClient) GenerateEarnings(ctx context.Context, profile ProfileData, papers []PaperData) (*EarningsResult, error) {
 	systemPrompt := `You are an expert in evaluating AI researcher career levels and compensation.
 
 CRITICAL: Be AGGRESSIVE and COMPETITIVE in recognizing top-tier AI/ML talent value. The current AI talent war has driven compensation far beyond traditional levels.
@@ -138,7 +138,6 @@ Return JSON:
 {
   "level_us": "L[X]",
   "level_cn": "P[X+2]",
-  "earnings": "PLACEHOLDER",
   "justification": "50-70 words emphasizing COMPETITIVE ADVANTAGES, market scarcity, research breakthroughs",
   "compensation_factors": {
     "research_impact_score": [1-10],
@@ -146,11 +145,6 @@ Return JSON:
     "role_seniority_score": [1-10],
     "industry_leadership_score": [1-10],
     "market_competition_score": [1-10]
-  },
-  "research_style": {
-    "depth_vs_breadth": [1-10, 1=broad, 10=deep],
-    "theory_vs_practice": [1-10, 1=practical, 10=theoretical],
-    "individual_vs_team": [1-10, 1=individual, 10=team]
   }
 }
 
@@ -168,28 +162,41 @@ Return ONLY JSON.`
 	// 提取JSON（处理markdown代码块）
 	jsonStr := extractJSON(response)
 
-	var result LevelResult
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+	// 用中间struct解析（earnings字段LLM返回字符串，我们忽略它）
+	var parsed struct {
+		LevelCN             string               `json:"level_cn"`
+		LevelUS             string               `json:"level_us"`
+		Justification       string               `json:"justification"`
+		CompensationFactors *CompensationFactors `json:"compensation_factors,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		// 如果解析失败，返回默认值
-		return &LevelResult{
+		return &EarningsResult{
 			LevelCN:       "P7",
 			LevelUS:       "L5",
-			Earnings:      "500000-800000",
+			Earnings:      500000,
 			Justification: response,
 		}, nil
+	}
+
+	result := &EarningsResult{
+		LevelCN:             parsed.LevelCN,
+		LevelUS:             parsed.LevelUS,
+		Justification:       parsed.Justification,
+		CompensationFactors: parsed.CompensationFactors,
 	}
 
 	// 获取fame score (并发调用Perplexity)
 	fameScore, _ := o.GetFameScore(ctx, profile)
 
 	// 程序化计算薪资 (包含fame multiplier)
-	result.Earnings = calculateProgrammaticSalary(&result, fameScore)
+	result.Earnings = calculateProgrammaticSalary(result, fameScore)
 
-	return &result, nil
+	return result, nil
 }
 
-// calculateProgrammaticSalary 根据compensation_factors程序化计算薪资
-func calculateProgrammaticSalary(result *LevelResult, fameScore int) string {
+// calculateProgrammaticSalary 根据compensation_factors程序化计算薪资（返回单个数字）
+func calculateProgrammaticSalary(result *EarningsResult, fameScore int) int {
 	// Software Engineer baseline salaries by level
 	sweBaselines := map[string]int{
 		"L3": 193944,
@@ -239,32 +246,38 @@ func calculateProgrammaticSalary(result *LevelResult, fameScore int) string {
 		fameMultiplier = 1.0 + float64(fameScore-6)*1.0
 	}
 
-	// Apply fame multiplier
-	finalSalary := salaryWithBonuses * fameMultiplier
-
-	// Create salary range (±15%)
-	minSalary := int(finalSalary * 0.85)
-	maxSalary := int(finalSalary * 1.15)
-
-	return fmt.Sprintf("%d-%d", minSalary, maxSalary)
+	// Apply fame multiplier and return single number
+	return int(salaryWithBonuses * fameMultiplier)
 }
 
-// GenerateSummary 生成摘要
-func (o *OpenRouterClient) GenerateSummary(ctx context.Context, profile ProfileData, papers []PaperData) (*SummaryResult, error) {
-	systemPrompt := `You are an expert in summarizing researcher profiles.
-Generate a concise 2-3 sentence summary of the researcher's work, key research areas, and notable contributions.
-Also provide 3-5 keywords and research areas.
+// GenerateResearchStyle 生成研究风格分析
+func (o *OpenRouterClient) GenerateResearchStyle(ctx context.Context, profile ProfileData, papers []PaperData) (*ResearchStyleResult, error) {
+	systemPrompt := `You are an expert in analyzing researcher's working style and approach.
 
-Return JSON format:
+Based on the researcher's profile and publications, analyze their research style across three dimensions.
+
+Return JSON:
 {
-  "summary": "...",
-  "keywords": ["...", "..."],
-  "research_areas": ["...", "..."]
-}`
+  "depth_vs_breadth": {
+    "score": [1-10, 1=broad generalist exploring many areas, 10=deep specialist in narrow focus],
+    "explanation": "20-30 words explaining the score based on their publication patterns"
+  },
+  "theory_vs_practice": {
+    "score": [1-10, 1=highly practical/applied work, 10=purely theoretical contributions],
+    "explanation": "20-30 words explaining the score based on their research focus"
+  },
+  "individual_vs_team": {
+    "score": [1-10, 1=mostly solo researcher, 10=highly collaborative team player],
+    "explanation": "20-30 words explaining the score based on their authorship patterns"
+  },
+  "justification": "40-60 words overall analysis of how these dimensions combine to define their unique research character"
+}
+
+Return ONLY JSON.`
 
 	profileJSON, _ := json.Marshal(profile)
 	papersJSON, _ := json.Marshal(papers)
-	userPrompt := fmt.Sprintf("Profile: %s\nPapers: %s", string(profileJSON), string(papersJSON))
+	userPrompt := fmt.Sprintf("Researcher Profile:\n%s\n\nTop Publications:\n%s\n\nAnalyze research style and return JSON.", string(profileJSON), string(papersJSON))
 
 	response, err := o.chat(ctx, systemPrompt, userPrompt)
 	if err != nil {
@@ -274,10 +287,14 @@ Return JSON format:
 	// 提取JSON（处理markdown代码块）
 	jsonStr := extractJSON(response)
 
-	var result SummaryResult
+	var result ResearchStyleResult
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return &SummaryResult{
-			Summary: response,
+		// 如果解析失败，返回默认值
+		return &ResearchStyleResult{
+			DepthVsBreadth:   ResearchStyleDimension{Score: 5, Explanation: "Balanced approach between depth and breadth"},
+			TheoryVsPractice: ResearchStyleDimension{Score: 5, Explanation: "Mix of theoretical and practical contributions"},
+			IndividualVsTeam: ResearchStyleDimension{Score: 5, Explanation: "Balance of solo and collaborative work"},
+			Justification:    response,
 		}, nil
 	}
 

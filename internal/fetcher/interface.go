@@ -15,8 +15,8 @@ type SearchFetcher interface {
 
 // LLMClient LLM客户端 (OpenRouter)
 type LLMClient interface {
-	GenerateLevel(ctx context.Context, profile ProfileData, papers []PaperData) (*LevelResult, error)
-	GenerateSummary(ctx context.Context, profile ProfileData, papers []PaperData) (*SummaryResult, error)
+	GenerateEarnings(ctx context.Context, profile ProfileData, papers []PaperData) (*EarningsResult, error)
+	GenerateResearchStyle(ctx context.Context, profile ProfileData, papers []PaperData) (*ResearchStyleResult, error)
 	GenerateRoleModel(ctx context.Context, profile ProfileData) (*RoleModelResult, error)
 	GenerateRoast(ctx context.Context, profile ProfileData) (string, error)
 	SummarizeContent(ctx context.Context, text string) (string, error)
@@ -61,14 +61,13 @@ type PaperData struct {
 	Venue     string   `json:"venue"`
 }
 
-// LevelResult 职级分析结果
-type LevelResult struct {
-	LevelCN             string                 `json:"level_cn"`
-	LevelUS             string                 `json:"level_us"`
-	Earnings            string                 `json:"earnings"`
-	Justification       string                 `json:"justification"`
-	ResearchStyle       map[string]interface{} `json:"research_style"`
-	CompensationFactors *CompensationFactors   `json:"compensation_factors,omitempty"`
+// EarningsResult 薪资分析结果
+type EarningsResult struct {
+	LevelCN             string               `json:"level_cn"`
+	LevelUS             string               `json:"level_us"`
+	Earnings            int                  `json:"earnings"` // 单个数字
+	Justification       string               `json:"justification"`
+	CompensationFactors *CompensationFactors `json:"compensation_factors,omitempty"`
 }
 
 // CompensationFactors 薪资计算因子
@@ -80,11 +79,18 @@ type CompensationFactors struct {
 	MarketCompetitionScore  float64 `json:"market_competition_score"`
 }
 
-// SummaryResult 摘要结果
-type SummaryResult struct {
-	Summary       string   `json:"summary"`
-	Keywords      []string `json:"keywords"`
-	ResearchAreas []string `json:"research_areas"`
+// ResearchStyleDimension 研究风格维度
+type ResearchStyleDimension struct {
+	Score       int    `json:"score"`
+	Explanation string `json:"explanation"`
+}
+
+// ResearchStyleResult 研究风格分析结果
+type ResearchStyleResult struct {
+	DepthVsBreadth   ResearchStyleDimension `json:"depth_vs_breadth"`
+	TheoryVsPractice ResearchStyleDimension `json:"theory_vs_practice"`
+	IndividualVsTeam ResearchStyleDimension `json:"individual_vs_team"`
+	Justification    string                 `json:"justification"`
 }
 
 // RoleModelResult 榜样结果

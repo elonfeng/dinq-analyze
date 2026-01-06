@@ -11,11 +11,9 @@ type CardType string
 const (
 	CardProfile             CardType = "profile_card"
 	CardPapers              CardType = "papers_card"
-	CardCoauthors           CardType = "coauthors_card"
-	CardLevel               CardType = "level_card"
-	CardSummary             CardType = "summary_card"
+	CardEarnings            CardType = "earnings_card"
+	CardResearchStyle       CardType = "research_style_card"
 	CardRoleModel           CardType = "role_model_card"
-	CardNews                CardType = "news_card"
 	CardRoast               CardType = "roast_card"
 	CardInsight             CardType = "insight_card"
 	CardClosestCollaborator CardType = "closest_collaborator_card"
@@ -25,8 +23,8 @@ const (
 
 // AllCards 所有card类型
 var AllCards = []CardType{
-	CardProfile, CardPapers, CardCoauthors, CardLevel,
-	CardSummary, CardRoleModel, CardNews, CardRoast,
+	CardProfile, CardPapers, CardEarnings, CardResearchStyle,
+	CardRoleModel, CardRoast,
 	CardInsight, CardClosestCollaborator, CardPaperOfYear, CardRepresentative,
 }
 
@@ -127,21 +125,12 @@ func NewAnalysisState() *AnalysisState {
 
 // ProfileCard profile卡片数据
 type ProfileCard struct {
-	Name            string         `json:"name"`
-	Affiliation     string         `json:"affiliation"`
-	Email           string         `json:"email,omitempty"`
-	Avatar          string         `json:"avatar,omitempty"`
-	Homepage        string         `json:"homepage,omitempty"`
-	Interests       string         `json:"interests"`
-	HIndex          int            `json:"h_index"`
-	HIndex5y        int            `json:"h_index_5y,omitempty"`
-	I10Index        int            `json:"i10_index"`
-	TotalCites      int            `json:"total_cites"`
-	Citations5y     int            `json:"citations_5y,omitempty"`
-	YearlyCitations map[string]int `json:"yearly_citations,omitempty"`
-	ScholarID       string         `json:"scholar_id"`
-	ScholarURL      string         `json:"scholar_url"`
-	Description     string         `json:"description,omitempty"`
+	Name        string `json:"name"`
+	Affiliation string `json:"affiliation"`
+	Avatar      string `json:"avatar,omitempty"`
+	Interests   string `json:"interests"`
+	ScholarURL  string `json:"scholar_url"`
+	Description string `json:"description,omitempty"`
 }
 
 // Paper 论文信息
@@ -156,40 +145,37 @@ type Paper struct {
 
 // PapersCard 论文卡片数据
 type PapersCard struct {
-	TotalPapers    int         `json:"total_papers"`
-	TotalCitations int         `json:"total_citations"`
-	Papers         []Paper     `json:"papers"`
-	YearlyStats    map[int]int `json:"yearly_stats"`
+	TotalPapers     int            `json:"total_papers"`
+	TotalCitations  int            `json:"total_citations"`
+	HIndex          int            `json:"h_index"`
+	HIndex5y        int            `json:"h_index_5y,omitempty"`
+	I10Index        int            `json:"i10_index"`
+	Citations5y     int            `json:"citations_5y,omitempty"`
+	YearlyCitations map[string]int `json:"yearly_citations,omitempty"`
+	YearlyStats     map[int]int    `json:"yearly_stats"`
+	Papers          []Paper        `json:"papers"`
 }
 
-// Coauthor 合作者
-type Coauthor struct {
-	Name        string `json:"name"`
-	ScholarID   string `json:"scholar_id,omitempty"`
-	Affiliation string `json:"affiliation,omitempty"`
-	PaperCount  int    `json:"paper_count,omitempty"`
+// EarningsCard 薪资卡片
+type EarningsCard struct {
+	Earnings int    `json:"earnings"` // 年薪（单个数字，美元）
+	LevelCN  string `json:"level_cn"` // 中国职级 (P6/P7/P8...)
+	LevelUS  string `json:"level_us"` // 美国职级 (L4/L5/L6...)
+	Reason   string `json:"reason"`   // 评估理由
 }
 
-// CoauthorsCard 合作者卡片
-type CoauthorsCard struct {
-	TotalCoauthors int        `json:"total_coauthors"`
-	Coauthors      []Coauthor `json:"coauthors"`
+// ResearchStyleDimension 研究风格维度
+type ResearchStyleDimension struct {
+	Score       int    `json:"score"`       // 1-10分
+	Explanation string `json:"explanation"` // 解释说明
 }
 
-// LevelCard 职级卡片
-type LevelCard struct {
-	LevelCN       string                 `json:"level_cn"`
-	LevelUS       string                 `json:"level_us"`
-	Earnings      string                 `json:"earnings"`
-	Justification string                 `json:"justification"`
-	ResearchStyle map[string]interface{} `json:"research_style,omitempty"`
-}
-
-// SummaryCard 摘要卡片
-type SummaryCard struct {
-	Summary       string   `json:"summary"`
-	Keywords      []string `json:"keywords"`
-	ResearchAreas []string `json:"research_areas"`
+// ResearchStyleCard 研究风格卡片
+type ResearchStyleCard struct {
+	DepthVsBreadth   ResearchStyleDimension `json:"depth_vs_breadth"`   // 深度vs广度
+	TheoryVsPractice ResearchStyleDimension `json:"theory_vs_practice"` // 理论vs实践
+	IndividualVsTeam ResearchStyleDimension `json:"individual_vs_team"` // 个人vs团队
+	Justification    string                 `json:"justification"`      // 总体分析理由
 }
 
 // RoleModelCard 榜样卡片
@@ -201,20 +187,6 @@ type RoleModelCard struct {
 	Achievement string `json:"achievement,omitempty"`
 	Reason      string `json:"reason"`
 	Similarity  string `json:"similarity"`
-}
-
-// NewsItem 新闻条目
-type NewsItem struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Source  string `json:"source,omitempty"`
-	Date    string `json:"date,omitempty"`
-	Snippet string `json:"snippet"`
-}
-
-// NewsCard 新闻卡片
-type NewsCard struct {
-	Items []NewsItem `json:"items"`
 }
 
 // RoastCard 吐槽卡片
