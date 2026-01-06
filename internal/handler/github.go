@@ -42,6 +42,7 @@ func (h *GitHubHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
+	defer writer.StopHeartbeat()
 
 	log.Printf("Starting GitHub SSE analysis for: %s", req.Query)
 

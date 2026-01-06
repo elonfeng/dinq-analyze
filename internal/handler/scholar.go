@@ -42,6 +42,7 @@ func (h *ScholarHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
+	defer writer.StopHeartbeat()
 
 	log.Printf("Starting SSE analysis for: %s", req.Query)
 

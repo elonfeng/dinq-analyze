@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"dinq-analyze-go/internal/model"
 )
 
 // Writer SSE写入器
 type Writer struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	mu      sync.Mutex
-	state   *model.AnalysisState
+	w         http.ResponseWriter
+	flusher   http.Flusher
+	mu        sync.Mutex
+	state     *model.AnalysisState
+	stopHeart chan struct{}
 }
 
 func NewWriter(w http.ResponseWriter) (*Writer, error) {
@@ -28,11 +30,40 @@ func NewWriter(w http.ResponseWriter) (*Writer, error) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	return &Writer{
-		w:       w,
-		flusher: flusher,
-		state:   model.NewAnalysisState(),
-	}, nil
+	writer := &Writer{
+		w:         w,
+		flusher:   flusher,
+		state:     model.NewAnalysisState(),
+		stopHeart: make(chan struct{}),
+	}
+
+	// 启动心跳
+	go writer.heartbeat()
+
+	return writer, nil
+}
+
+// heartbeat 定期发送心跳保持连接
+func (s *Writer) heartbeat() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.mu.Lock()
+			fmt.Fprint(s.w, ": keepalive\n\n")
+			s.flusher.Flush()
+			s.mu.Unlock()
+		case <-s.stopHeart:
+			return
+		}
+	}
+}
+
+// StopHeartbeat 停止心跳
+func (s *Writer) StopHeartbeat() {
+	close(s.stopHeart)
 }
 
 func (s *Writer) send() error {
@@ -160,10 +191,11 @@ func (s *Writer) GetAllCardsData() map[string]interface{} {
 
 // GitHubWriter GitHub SSE写入器
 type GitHubWriter struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	mu      sync.Mutex
-	state   *model.GitHubAnalysisState
+	w         http.ResponseWriter
+	flusher   http.Flusher
+	mu        sync.Mutex
+	state     *model.GitHubAnalysisState
+	stopHeart chan struct{}
 }
 
 // NewGitHubWriter 创建GitHub SSE写入器
@@ -178,11 +210,39 @@ func NewGitHubWriter(w http.ResponseWriter) (*GitHubWriter, error) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	return &GitHubWriter{
-		w:       w,
-		flusher: flusher,
-		state:   &model.GitHubAnalysisState{},
-	}, nil
+	writer := &GitHubWriter{
+		w:         w,
+		flusher:   flusher,
+		state:     &model.GitHubAnalysisState{},
+		stopHeart: make(chan struct{}),
+	}
+
+	go writer.heartbeat()
+
+	return writer, nil
+}
+
+// heartbeat 定期发送心跳保持连接
+func (g *GitHubWriter) heartbeat() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			g.mu.Lock()
+			fmt.Fprint(g.w, ": keepalive\n\n")
+			g.flusher.Flush()
+			g.mu.Unlock()
+		case <-g.stopHeart:
+			return
+		}
+	}
+}
+
+// StopHeartbeat 停止心跳
+func (g *GitHubWriter) StopHeartbeat() {
+	close(g.stopHeart)
 }
 
 func (g *GitHubWriter) send() error {
@@ -284,10 +344,11 @@ func (g *GitHubWriter) recalcOverall() {
 
 // LinkedInWriter LinkedIn SSE写入器
 type LinkedInWriter struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	mu      sync.Mutex
-	state   *model.LinkedInAnalysisState
+	w         http.ResponseWriter
+	flusher   http.Flusher
+	mu        sync.Mutex
+	state     *model.LinkedInAnalysisState
+	stopHeart chan struct{}
 }
 
 // NewLinkedInWriter 创建LinkedIn SSE写入器
@@ -302,11 +363,39 @@ func NewLinkedInWriter(w http.ResponseWriter) (*LinkedInWriter, error) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	return &LinkedInWriter{
-		w:       w,
-		flusher: flusher,
-		state:   &model.LinkedInAnalysisState{},
-	}, nil
+	writer := &LinkedInWriter{
+		w:         w,
+		flusher:   flusher,
+		state:     &model.LinkedInAnalysisState{},
+		stopHeart: make(chan struct{}),
+	}
+
+	go writer.heartbeat()
+
+	return writer, nil
+}
+
+// heartbeat 定期发送心跳保持连接
+func (l *LinkedInWriter) heartbeat() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			l.mu.Lock()
+			fmt.Fprint(l.w, ": keepalive\n\n")
+			l.flusher.Flush()
+			l.mu.Unlock()
+		case <-l.stopHeart:
+			return
+		}
+	}
+}
+
+// StopHeartbeat 停止心跳
+func (l *LinkedInWriter) StopHeartbeat() {
+	close(l.stopHeart)
 }
 
 func (l *LinkedInWriter) send() error {

@@ -43,6 +43,7 @@ func (h *LinkedInHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
+	defer writer.StopHeartbeat()
 
 	log.Printf("Starting LinkedIn SSE analysis for: %s (with data: %v)", req.Query, req.Data != nil)
 
