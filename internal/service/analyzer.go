@@ -148,6 +148,10 @@ func FindClosestCollaboratorFromPapers(ctx context.Context, papers []model.Paper
 			card.FullName = c.Name
 			card.Affiliation = c.Affiliation
 			card.ScholarID = c.ScholarID
+			// 如果有scholar_id，使用Google Scholar头像
+			if c.ScholarID != "" {
+				card.Avatar = "https://scholar.googleusercontent.com/citations?view_op=view_photo&user=" + c.ScholarID + "&citpid=2"
+			}
 			foundInCoauthors = true
 			break
 		}
