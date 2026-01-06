@@ -174,7 +174,7 @@ func FindClosestCollaboratorFromPapers(ctx context.Context, papers []model.Paper
 		card.BestCoauthoredPaper = &model.BestPaperInfo{
 			Title:     best.bestPaper.Title,
 			Year:      best.bestPaper.Year,
-			Venue:     formatVenueWithYear(simplifyVenue(best.bestPaper.Venue), best.bestPaper.Year),
+			Venue:     best.bestPaper.Venue,
 			Citations: best.bestPaper.Citations,
 		}
 	}
@@ -235,7 +235,7 @@ func FindPaperOfYearFromPapers(papers []model.Paper, authorName string) *model.P
 	return &model.PaperOfYearCard{
 		Title:          best.Title,
 		Year:           best.Year,
-		Venue:          formatVenueWithYear(simplifyVenue(best.Venue), best.Year),
+		Venue:          best.Venue,
 		Citations:      best.Citations,
 		AuthorPosition: getAuthorPosition(best.Authors, authorName),
 	}
@@ -278,7 +278,7 @@ func FindRepresentativePaperFromPapers(papers []model.Paper, authorName string) 
 	return &model.RepresentativePaperCard{
 		Title:          best.Title,
 		Year:           best.Year,
-		Venue:          simplifyVenue(best.Venue),
+		Venue:          best.Venue,
 		FullVenue:      best.Venue,
 		Citations:      best.Citations,
 		AuthorPosition: getAuthorPosition(best.Authors, authorName),
@@ -296,7 +296,7 @@ func formatVenueWithYear(venue string, year int) string {
 	return venue
 }
 
-// simplifyVenue 简化会议名称
+// simplifyVenue 简化会议名称（用于统计，不认识的返回 "Others"）
 func simplifyVenue(venue string) string {
 	if venue == "" {
 		return ""
