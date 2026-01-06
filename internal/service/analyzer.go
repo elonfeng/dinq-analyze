@@ -174,7 +174,7 @@ func FindClosestCollaboratorFromPapers(ctx context.Context, papers []model.Paper
 		card.BestCoauthoredPaper = &model.BestPaperInfo{
 			Title:     best.bestPaper.Title,
 			Year:      best.bestPaper.Year,
-			Venue:     best.bestPaper.Venue,
+			Venue:     simplifyVenue(best.bestPaper.Venue),
 			Citations: best.bestPaper.Citations,
 		}
 	}
@@ -235,7 +235,7 @@ func FindPaperOfYearFromPapers(papers []model.Paper, authorName string) *model.P
 	return &model.PaperOfYearCard{
 		Title:          best.Title,
 		Year:           best.Year,
-		Venue:          best.Venue,
+		Venue:          simplifyVenue(best.Venue),
 		Citations:      best.Citations,
 		AuthorPosition: getAuthorPosition(best.Authors, authorName),
 	}
@@ -278,7 +278,7 @@ func FindRepresentativePaperFromPapers(papers []model.Paper, authorName string) 
 	return &model.RepresentativePaperCard{
 		Title:          best.Title,
 		Year:           best.Year,
-		Venue:          best.Venue,
+		Venue:          simplifyVenue(best.Venue),
 		FullVenue:      best.Venue,
 		Citations:      best.Citations,
 		AuthorPosition: getAuthorPosition(best.Authors, authorName),
@@ -296,7 +296,7 @@ func formatVenueWithYear(venue string, year int) string {
 	return venue
 }
 
-// simplifyVenue 简化会议名称（用于统计，不认识的返回 "Others"）
+// simplifyVenue 简化会议名称
 func simplifyVenue(venue string) string {
 	if venue == "" {
 		return ""
@@ -309,7 +309,7 @@ func simplifyVenue(venue string) string {
 		return "arXiv"
 	}
 
-	// 检查直接匹配
+	// 检查直接匹配顶会
 	for name := range TopTierVenues {
 		if strings.Contains(venueUpper, strings.ToUpper(name)) {
 			return name
@@ -333,7 +333,8 @@ func simplifyVenue(venue string) string {
 		}
 	}
 
-	return "Others"
+	// 不认识的返回原始值
+	return venue
 }
 
 // isTopTier 判断是否是顶会
