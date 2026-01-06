@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,17 +59,42 @@ func isScholarID(query string) bool {
 	return matched
 }
 
+// extractScholarIDFromURL 从 Google Scholar URL 中提取 scholar_id
+// 支持格式: https://scholar.google.com/citations?user=dOad5HoAAAAJ 或 https://scholar.google.com/citations?user=dOad5HoAAAAJ&hl=en
+func extractScholarIDFromURL(url string) string {
+	if !strings.Contains(url, "scholar.google.com/citations") {
+		return ""
+	}
+
+	// 查找 user= 参数
+	idx := strings.Index(url, "user=")
+	if idx == -1 {
+		return ""
+	}
+
+	start := idx + 5
+	end := start
+	for end < len(url) && url[end] != '&' {
+		end++
+	}
+
+	return url[start:end]
+}
+
 // Analyze 分析学者
-// query: 可以是scholar_id或者人名
+// query: 可以是scholar_id、Google Scholar URL或者人名
 func (s *ScholarService) Analyze(ctx context.Context, query string, w *sse.Writer) error {
 	// 设置query
 	w.SetQuery(query)
 
 	var scholarID string
 
-	// 判断是scholar_id还是人名
-	if isScholarID(query) {
-		// 直接是scholar_id
+	// 1. 先检查是否是 Google Scholar URL
+	if urlID := extractScholarIDFromURL(query); urlID != "" {
+		scholarID = urlID
+		w.SetAction(5, "Scholar URL detected, starting analysis...")
+	} else if isScholarID(query) {
+		// 2. 直接是scholar_id
 		scholarID = query
 		w.SetAction(5, "Scholar ID detected, starting analysis...")
 	} else {
