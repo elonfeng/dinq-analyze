@@ -125,6 +125,7 @@ func NewAnalysisState() *AnalysisState {
 
 // ProfileCard profile卡片数据
 type ProfileCard struct {
+	ScholarID   string `json:"scholar_id"`
 	Name        string `json:"name"`
 	Affiliation string `json:"affiliation"`
 	Avatar      string `json:"avatar,omitempty"`

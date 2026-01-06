@@ -161,6 +161,7 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 
 	// ========== 立即发送初始 profile_card（只有 avatar 和 scholar_url）==========
 	initialProfile := model.ProfileCard{
+		ScholarID:  scholarID,
 		ScholarURL: "https://scholar.google.com/citations?user=" + scholarID,
 		Avatar:     "https://scholar.googleusercontent.com/citations?view_op=view_photo&user=" + scholarID + "&citpid=2",
 	}
@@ -224,6 +225,7 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 
 		// 填充3个card
 		profileCard := model.ProfileCard{
+			ScholarID:   scholarID,
 			Name:        parsed.Profile.Name,
 			Affiliation: parsed.Profile.Affiliation,
 			Interests:   parsed.Profile.Interests,
@@ -486,6 +488,7 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 	if profileDescription != "" {
 		// 重新构建完整的profile card并更新
 		profileCard := model.ProfileCard{
+			ScholarID:   scholarID,
 			Name:        parsedData.Profile.Name,
 			Affiliation: parsedData.Profile.Affiliation,
 			Interests:   parsedData.Profile.Interests,
