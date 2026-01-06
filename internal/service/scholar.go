@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -57,24 +56,6 @@ func isScholarID(query string) bool {
 	// Google Scholar ID 通常是12位字母数字组合，如 "JicYPdAAAAAJ"
 	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]{10,14}$`, query)
 	return matched
-}
-
-// hasAbbreviatedNames 检查作者列表中是否有缩写名
-func hasAbbreviatedNames(authors []string) bool {
-	for _, author := range authors {
-		parts := strings.Fields(author)
-		for _, part := range parts {
-			// 如果有单字符部分（如 "B", "Z"），认为是缩写
-			if len(part) == 1 && part[0] >= 'A' && part[0] <= 'Z' {
-				return true
-			}
-			// 如果有 "X." 这样的缩写形式
-			if len(part) == 2 && part[1] == '.' {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // Analyze 分析学者
@@ -249,23 +230,11 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 		totalCitations := 0
 		yearlyStats := make(map[int]int)
 
-		// 扩展作者名：先用coauthors，匹配不到的再用OpenAlex
+		// 扩展作者名：用coauthors列表匹配扩展
 		for _, p := range parsed.Papers {
 			expandedAuthors := p.Authors
-
-			// 第一步：用合作者列表匹配扩展
 			if len(coauthorNames) > 0 {
 				expandedAuthors = utils.ExpandAuthorNames(p.Authors, coauthorNames)
-			}
-
-			// 第二步：检查是否还有未扩展的缩写名，用OpenAlex补充
-			if p.Title != "" && hasAbbreviatedNames(expandedAuthors) {
-				fullAuthors, err := s.openAlexClient.FindAuthorsByTitle(ctx, p.Title)
-				if err == nil && len(fullAuthors) > 0 {
-					// 合并coauthorNames和OpenAlex结果
-					allFullNames := append(coauthorNames, fullAuthors...)
-					expandedAuthors = utils.ExpandAuthorNames(p.Authors, allFullNames)
-				}
 			}
 
 			papers = append(papers, model.Paper{
@@ -300,7 +269,7 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 		w.SetCard(model.CardInsight, insightCard, "Insight loaded")
 
 		// 最亲密合作者 - 使用扩展后的papers
-		closestCollab := FindClosestCollaboratorFromPapers(papers, parsed.Coauthors, parsed.Profile.Name)
+		closestCollab := FindClosestCollaboratorFromPapers(ctx, papers, parsed.Coauthors, parsed.Profile.Name, s.openAlexClient)
 		if closestCollab != nil {
 			w.SetCard(model.CardClosestCollaborator, closestCollab, "Collaborator found")
 		}

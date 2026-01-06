@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -87,24 +88,8 @@ func AnalyzePapers(papers []fetcher.PaperData, authorName string) *model.Insight
 	return insight
 }
 
-// FindClosestCollaborator 找出最亲密的合作者（使用原始数据）
-func FindClosestCollaborator(papers []fetcher.PaperData, coauthors []fetcher.CoauthorData, authorName string) *model.ClosestCollaboratorCard {
-	// 转换为model.Paper格式
-	modelPapers := make([]model.Paper, len(papers))
-	for i, p := range papers {
-		modelPapers[i] = model.Paper{
-			Title:     p.Title,
-			Authors:   p.Authors,
-			Venue:     p.Venue,
-			Year:      p.Year,
-			Citations: p.Citations,
-		}
-	}
-	return FindClosestCollaboratorFromPapers(modelPapers, coauthors, authorName)
-}
-
-// FindClosestCollaboratorFromPapers 找出最亲密的合作者（使用扩展后的论文数据）
-func FindClosestCollaboratorFromPapers(papers []model.Paper, coauthors []fetcher.CoauthorData, authorName string) *model.ClosestCollaboratorCard {
+// FindClosestCollaboratorFromPapers 找出最亲密的合作者
+func FindClosestCollaboratorFromPapers(ctx context.Context, papers []model.Paper, coauthors []fetcher.CoauthorData, authorName string, openAlexClient *fetcher.OpenAlexFetcher) *model.ClosestCollaboratorCard {
 	if len(papers) == 0 {
 		return nil
 	}
@@ -157,12 +142,27 @@ func FindClosestCollaboratorFromPapers(papers []model.Paper, coauthors []fetcher
 	}
 
 	// 匹配coauthors列表获取更多信息
+	foundInCoauthors := false
 	for _, c := range coauthors {
 		if isSameAuthor(c.Name, best.name) {
 			card.FullName = c.Name
 			card.Affiliation = c.Affiliation
 			card.ScholarID = c.ScholarID
+			foundInCoauthors = true
 			break
+		}
+	}
+
+	// 如果coauthors列表没找到，用OpenAlex查bestPaper获取全名
+	if !foundInCoauthors && best.bestPaper != nil && openAlexClient != nil {
+		fullAuthors, err := openAlexClient.FindAuthorsByTitle(ctx, best.bestPaper.Title)
+		if err == nil && len(fullAuthors) > 0 {
+			for _, fullName := range fullAuthors {
+				if isSameAuthor(fullName, best.name) {
+					card.FullName = fullName
+					break
+				}
+			}
 		}
 	}
 
