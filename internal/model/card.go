@@ -154,7 +154,6 @@ type PapersCard struct {
 	Citations5y     int            `json:"citations_5y,omitempty"`
 	YearlyCitations map[string]int `json:"yearly_citations,omitempty"`
 	YearlyStats     map[int]int    `json:"yearly_stats"`
-	Papers          []Paper        `json:"papers"`
 }
 
 // EarningsCard 薪资卡片

@@ -287,7 +287,6 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 			Citations5y:     parsed.Profile.Citations5y,
 			YearlyCitations: parsed.Profile.YearlyCitations,
 			YearlyStats:     yearlyStats,
-			Papers:          papers,
 		}
 
 		w.SetCard(model.CardProfile, profileCard, "Profile loaded")
