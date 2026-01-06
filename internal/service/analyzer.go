@@ -12,33 +12,6 @@ import (
 	"dinq-analyze-go/internal/model"
 )
 
-// TopTierVenues 顶会列表
-var TopTierVenues = map[string]bool{
-	"CVPR": true, "ICCV": true, "ECCV": true,
-	"NeurIPS": true, "NIPS": true, "ICLR": true, "ICML": true,
-	"AAAI": true, "IJCAI": true,
-	"ACM MM": true, "SIGGRAPH": true,
-	"ICASSP": true, "ICIP": true,
-	"KDD": true, "WWW": true,
-	"ACL": true, "EMNLP": true, "NAACL": true,
-	"IJCV": true, "TPAMI": true, "TIP": true,
-	"3DV": true,
-}
-
-// VenueAliases 会议别名映射
-var VenueAliases = map[string]string{
-	"NIPS":                           "NeurIPS",
-	"Advances in Neural Information": "NeurIPS",
-	"Computer Vision and Pattern":    "CVPR",
-	"International Conference on Computer Vision":          "ICCV",
-	"European Conference on Computer Vision":               "ECCV",
-	"International Conference on Machine Learning":         "ICML",
-	"International Conference on Learning Representations": "ICLR",
-	"AAAI Conference on Artificial Intelligence":           "AAAI",
-	"ACM International Conference on Multimedia":           "ACM MM",
-	"International Conference on 3D Vision":                "3DV",
-}
-
 // AnalyzePapers 分析论文数据，生成洞察
 func AnalyzePapers(papers []fetcher.PaperData, authorName string) *model.InsightCard {
 	insight := &model.InsightCard{
@@ -296,53 +269,17 @@ func formatVenueWithYear(venue string, year int) string {
 	return venue
 }
 
-// simplifyVenue 简化会议名称
+// simplifyVenue 简化会议名称（使用 ConferenceMatcher）
 func simplifyVenue(venue string) string {
-	if venue == "" {
-		return ""
-	}
-
-	venueUpper := strings.ToUpper(venue)
-
-	// 检查是否是arXiv
-	if strings.Contains(venueUpper, "ARXIV") {
-		return "arXiv"
-	}
-
-	// 检查直接匹配顶会
-	for name := range TopTierVenues {
-		if strings.Contains(venueUpper, strings.ToUpper(name)) {
-			return name
-		}
-	}
-
-	// 检查别名
-	for alias, name := range VenueAliases {
-		if strings.Contains(venue, alias) {
-			return name
-		}
-	}
-
-	// 尝试提取会议缩写 (大写字母组成的词)
-	re := regexp.MustCompile(`\b([A-Z]{2,})\b`)
-	matches := re.FindStringSubmatch(venue)
-	if len(matches) > 1 {
-		abbr := matches[1]
-		if TopTierVenues[abbr] {
-			return abbr
-		}
-	}
-
-	// 不认识的返回原始值
-	return venue
+	return MatchConference(venue)
 }
 
 // isTopTier 判断是否是顶会
 func isTopTier(venue string) bool {
-	if venue == "" || venue == "Others" || venue == "arXiv" {
+	if venue == "" || venue == "arXiv" || venue == "bioRxiv" {
 		return false
 	}
-	return TopTierVenues[venue]
+	return IsTopTierVenue(venue)
 }
 
 // getAuthorPosition 获取作者在论文中的位置
