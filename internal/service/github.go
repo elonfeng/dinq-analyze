@@ -423,19 +423,6 @@ func (s *GitHubService) buildFeatureProjectCard(ctx context.Context, user *fetch
 
 	topRepo := user.TopRepos.Nodes[0]
 
-	// 提取 owner avatar
-	var owner *model.GitHubRepoOwner
-	if parts := strings.Split(topRepo.NameWithOwner, "/"); len(parts) >= 1 {
-		ownerLogin := parts[0]
-		avatarURL := topRepo.Owner.AvatarURL
-		if avatarURL == "" {
-			avatarURL = fmt.Sprintf("https://avatars.githubusercontent.com/%s", ownerLogin)
-		}
-		owner = &model.GitHubRepoOwner{
-			AvatarURL: avatarURL,
-		}
-	}
-
 	// 生成 tags (基于 topics 或 AI)
 	tags := make([]string, 0)
 	for _, t := range topRepo.RepositoryTopics.Nodes {
@@ -449,14 +436,14 @@ func (s *GitHubService) buildFeatureProjectCard(ctx context.Context, user *fetch
 	}
 
 	return &model.GitHubFeatureProjectCard{
-		UsedBy:          0, // GitHub API不提供，默认0
-		Contributors:    0, // GitHub API不提供，默认0
-		MonthlyTrending: 0, // GitHub API不提供，默认0
+		UsedBy:          0,
+		Contributors:    0,
+		MonthlyTrending: 0,
 		Name:            topRepo.Name,
 		NameWithOwner:   topRepo.NameWithOwner,
 		URL:             topRepo.URL,
 		Description:     topRepo.Description,
-		Owner:           owner,
+		Owner:           &model.GitHubRepoOwner{AvatarURL: topRepo.Owner.AvatarURL},
 		StargazerCount:  topRepo.StargazerCount,
 		ForkCount:       topRepo.ForkCount,
 		Tags:            tags,
@@ -473,21 +460,13 @@ func (s *GitHubService) buildTopProjectsCard(user *fetcher.GitHubUserData) *mode
 	prRepoMap := make(map[string]*model.GitHubTopProject)
 	for _, contrib := range user.ContributionsCollection.PRContributions {
 		repo := contrib.Repository
-		// 从 nameWithOwner 提取 owner 并构建头像 URL
-		var owner *model.GitHubRepoOwner
-		if parts := strings.Split(repo.NameWithOwner, "/"); len(parts) >= 1 {
-			ownerLogin := parts[0]
-			owner = &model.GitHubRepoOwner{
-				AvatarURL: fmt.Sprintf("https://avatars.githubusercontent.com/%s", ownerLogin),
-			}
-		}
 		prRepoMap[repo.URL] = &model.GitHubTopProject{
 			PullRequests: contrib.Contributions.TotalCount,
 			Repository: &model.GitHubTopProjectRepo{
 				URL:            repo.URL,
 				Name:           repo.Name,
 				Description:    repo.Description,
-				Owner:          owner,
+				Owner:          &model.GitHubRepoOwner{AvatarURL: repo.Owner.AvatarURL},
 				StargazerCount: repo.StargazerCount,
 			},
 		}
@@ -515,25 +494,13 @@ func (s *GitHubService) buildTopProjectsCard(user *fetcher.GitHubUserData) *mode
 			if len(card.Projects) >= 10 {
 				break
 			}
-			// 提取 owner
-			var owner *model.GitHubRepoOwner
-			if parts := strings.Split(repo.NameWithOwner, "/"); len(parts) >= 1 {
-				ownerLogin := parts[0]
-				avatarURL := repo.Owner.AvatarURL
-				if avatarURL == "" {
-					avatarURL = fmt.Sprintf("https://avatars.githubusercontent.com/%s", ownerLogin)
-				}
-				owner = &model.GitHubRepoOwner{
-					AvatarURL: avatarURL,
-				}
-			}
 			card.Projects = append(card.Projects, model.GitHubTopProject{
-				PullRequests: 0, // 自己的仓库没有PR贡献数
+				PullRequests: 0,
 				Repository: &model.GitHubTopProjectRepo{
 					URL:            repo.URL,
 					Name:           repo.Name,
 					Description:    repo.Description,
-					Owner:          owner,
+					Owner:          &model.GitHubRepoOwner{AvatarURL: repo.Owner.AvatarURL},
 					StargazerCount: repo.StargazerCount,
 				},
 			})
