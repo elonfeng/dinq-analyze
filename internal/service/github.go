@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,9 +62,9 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 	// 构建基础数据
 	baseData := s.buildBaseData(userData)
 
-	// 发送profile card（第一个，同步）
+	// 发送profile card（第一个，同步，包含AI生成的标签）
 	w.SetAction(20, "Processing profile...")
-	profileCard := s.buildProfileCard(userData)
+	profileCard := s.buildProfileCard(ctx, userData)
 	w.SendCardDone(model.GitHubCardProfile, profileCard)
 
 	// 全部card并发处理，谁先完成谁先发送
@@ -83,15 +85,39 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 		resultsMu.Unlock()
 	}()
 
-	// Repos card
+	// Feature Project card
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		reposCard := s.buildReposCard(userData)
-		w.SendCardDone(model.GitHubCardRepos, reposCard)
+		featureCard := s.buildFeatureProjectCard(ctx, userData)
+		w.SendCardDone(model.GitHubCardFeatureProject, featureCard)
 		resultsMu.Lock()
-		results[model.GitHubCardRepos] = reposCard
+		results[model.GitHubCardFeatureProject] = featureCard
 		resultsMu.Unlock()
+	}()
+
+	// Top Projects card
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		topProjectsCard := s.buildTopProjectsCard(userData)
+		w.SendCardDone(model.GitHubCardTopProjects, topProjectsCard)
+		resultsMu.Lock()
+		results[model.GitHubCardTopProjects] = topProjectsCard
+		resultsMu.Unlock()
+	}()
+
+	// Most Valuable PR card
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		prCard := s.buildMostValuablePRCard(ctx, userData)
+		if prCard != nil {
+			w.SendCardDone(model.GitHubCardMostValuablePR, prCard)
+			resultsMu.Lock()
+			results[model.GitHubCardMostValuablePR] = prCard
+			resultsMu.Unlock()
+		}
 	}()
 
 	// Role Model card (LLM)
@@ -132,9 +158,9 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 		if err != nil || summaryCard == nil {
 			summaryCard = s.defaultSummary(baseData, userData)
 		}
-		w.SendCardDone(model.GitHubCardSummary, summaryCard)
+		w.SendCardDone(model.GitHubCardValuation, summaryCard)
 		resultsMu.Lock()
-		results[model.GitHubCardSummary] = summaryCard
+		results[model.GitHubCardValuation] = summaryCard
 		resultsMu.Unlock()
 	}()
 
@@ -162,10 +188,12 @@ func (s *GitHubService) sendCachedResult(w *sse.GitHubWriter, data map[string]in
 	cardOrder := []model.GitHubCardType{
 		model.GitHubCardProfile,
 		model.GitHubCardActivity,
-		model.GitHubCardRepos,
+		model.GitHubCardFeatureProject,
+		model.GitHubCardTopProjects,
+		model.GitHubCardMostValuablePR,
 		model.GitHubCardRoleModel,
 		model.GitHubCardRoast,
-		model.GitHubCardSummary,
+		model.GitHubCardValuation,
 	}
 
 	for _, cardType := range cardOrder {
@@ -240,18 +268,76 @@ func (s *GitHubService) buildBaseData(user *fetcher.GitHubUserData) map[string]i
 }
 
 // buildProfileCard 构建profile card
-func (s *GitHubService) buildProfileCard(user *fetcher.GitHubUserData) *model.GitHubProfileCard {
+func (s *GitHubService) buildProfileCard(ctx context.Context, user *fetcher.GitHubUserData) *model.GitHubProfileCard {
+	// 生成个人标签
+	tags := s.generatePersonalTags(ctx, user)
+
 	return &model.GitHubProfileCard{
-		Login:       user.Login,
-		Name:        user.Name,
-		AvatarURL:   user.AvatarURL,
-		Bio:         user.Bio,
-		URL:         user.URL,
-		Followers:   user.Followers.TotalCount,
-		Following:   user.Following.TotalCount,
-		PublicRepos: user.Repositories.TotalCount,
-		CreatedAt:   user.CreatedAt,
+		Login:        user.Login,
+		Name:         user.Name,
+		AvatarURL:    user.AvatarURL,
+		Bio:          user.Bio,
+		URL:          user.URL,
+		Followers:    user.Followers.TotalCount,
+		Following:    user.Following.TotalCount,
+		PublicRepos:  user.Repositories.TotalCount,
+		CreatedAt:    user.CreatedAt,
+		PersonalTags: tags,
 	}
+}
+
+// generatePersonalTags 生成个人标签
+func (s *GitHubService) generatePersonalTags(ctx context.Context, user *fetcher.GitHubUserData) []string {
+	// 收集顶级仓库语言
+	languages := make([]string, 0)
+	for _, repo := range user.TopRepos.Nodes {
+		if repo.PrimaryLanguage.Name != "" {
+			languages = append(languages, repo.PrimaryLanguage.Name)
+		}
+	}
+
+	prompt := fmt.Sprintf(`Based on this GitHub profile, provide exactly 3 short professional tags (single words or 2-word phrases):
+
+Name: %s
+Bio: %s
+Top Languages: %s
+Top Repo: %s
+Followers: %d
+
+Return only a comma-separated list of 3 tags, no JSON. Example: Open Source, Python, Machine Learning`,
+		user.Name,
+		user.Bio,
+		strings.Join(languages, ", "),
+		func() string {
+			if len(user.TopRepos.Nodes) > 0 {
+				return user.TopRepos.Nodes[0].Name
+			}
+			return ""
+		}(),
+		user.Followers.TotalCount)
+
+	response, err := s.llmClient.Chat(ctx, "You generate professional tags for GitHub developers.", prompt)
+	if err != nil {
+		// 默认标签：基于语言
+		if len(languages) > 0 {
+			return languages[:min(3, len(languages))]
+		}
+		return []string{"Developer", "Open Source"}
+	}
+
+	// 解析逗号分隔的标签
+	tags := strings.Split(response, ",")
+	result := make([]string, 0, 3)
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag != "" && len(result) < 3 {
+			result = append(result, tag)
+		}
+	}
+	if len(result) == 0 {
+		return []string{"Developer"}
+	}
+	return result
 }
 
 // buildActivityCard 构建activity card
@@ -329,110 +415,223 @@ func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData) *model.G
 	}
 }
 
-// buildReposCard 构建repos card
-func (s *GitHubService) buildReposCard(user *fetcher.GitHubUserData) *model.GitHubReposCard {
-	card := &model.GitHubReposCard{
-		TopProjects: make([]model.GitHubRepository, 0),
+// buildFeatureProjectCard 构建feature project card
+func (s *GitHubService) buildFeatureProjectCard(ctx context.Context, user *fetcher.GitHubUserData) *model.GitHubFeatureProjectCard {
+	if len(user.TopRepos.Nodes) == 0 {
+		return nil
 	}
 
-	// Feature project (最多star的)
-	if len(user.TopRepos.Nodes) > 0 {
-		topRepo := user.TopRepos.Nodes[0]
-		topics := make([]string, 0)
-		for _, t := range topRepo.RepositoryTopics.Nodes {
-			topics = append(topics, t.Topic.Name)
+	topRepo := user.TopRepos.Nodes[0]
+
+	// 提取 owner avatar
+	var owner *model.GitHubRepoOwner
+	if parts := strings.Split(topRepo.NameWithOwner, "/"); len(parts) >= 1 {
+		ownerLogin := parts[0]
+		avatarURL := topRepo.Owner.AvatarURL
+		if avatarURL == "" {
+			avatarURL = fmt.Sprintf("https://avatars.githubusercontent.com/%s", ownerLogin)
 		}
-		card.FeatureProject = &model.GitHubRepository{
-			Name:        topRepo.Name,
-			FullName:    topRepo.NameWithOwner,
-			Description: topRepo.Description,
-			URL:         topRepo.URL,
-			Stars:       topRepo.StargazerCount,
-			Forks:       topRepo.ForkCount,
-			Language:    topRepo.PrimaryLanguage.Name,
-			Topics:      topics,
-			IsOwner:     true,
+		owner = &model.GitHubRepoOwner{
+			AvatarURL: avatarURL,
 		}
 	}
 
-	// Top projects (从PR贡献)
-	prRepoMap := make(map[string]*model.GitHubRepository)
+	// 生成 tags (基于 topics 或 AI)
+	tags := make([]string, 0)
+	for _, t := range topRepo.RepositoryTopics.Nodes {
+		if len(tags) < 3 {
+			tags = append(tags, t.Topic.Name)
+		}
+	}
+	// 如果没有topics，生成一些基于语言的标签
+	if len(tags) == 0 && topRepo.PrimaryLanguage.Name != "" {
+		tags = append(tags, topRepo.PrimaryLanguage.Name)
+	}
+
+	return &model.GitHubFeatureProjectCard{
+		UsedBy:          0, // GitHub API不提供，默认0
+		Contributors:    0, // GitHub API不提供，默认0
+		MonthlyTrending: 0, // GitHub API不提供，默认0
+		Name:            topRepo.Name,
+		NameWithOwner:   topRepo.NameWithOwner,
+		URL:             topRepo.URL,
+		Description:     topRepo.Description,
+		Owner:           owner,
+		StargazerCount:  topRepo.StargazerCount,
+		ForkCount:       topRepo.ForkCount,
+		Tags:            tags,
+	}
+}
+
+// buildTopProjectsCard 构建top projects card
+func (s *GitHubService) buildTopProjectsCard(user *fetcher.GitHubUserData) *model.GitHubTopProjectsCard {
+	card := &model.GitHubTopProjectsCard{
+		Projects: make([]model.GitHubTopProject, 0),
+	}
+
+	// 从PR贡献构建
+	prRepoMap := make(map[string]*model.GitHubTopProject)
 	for _, contrib := range user.ContributionsCollection.PRContributions {
 		repo := contrib.Repository
-		prRepoMap[repo.URL] = &model.GitHubRepository{
-			Name:         repo.Name,
-			URL:          repo.URL,
-			Description:  repo.Description,
-			Stars:        repo.StargazerCount,
+		// 从 nameWithOwner 提取 owner 并构建头像 URL
+		var owner *model.GitHubRepoOwner
+		if parts := strings.Split(repo.NameWithOwner, "/"); len(parts) >= 1 {
+			ownerLogin := parts[0]
+			owner = &model.GitHubRepoOwner{
+				AvatarURL: fmt.Sprintf("https://avatars.githubusercontent.com/%s", ownerLogin),
+			}
+		}
+		prRepoMap[repo.URL] = &model.GitHubTopProject{
 			PullRequests: contrib.Contributions.TotalCount,
+			Repository: &model.GitHubTopProjectRepo{
+				URL:            repo.URL,
+				Name:           repo.Name,
+				Description:    repo.Description,
+				Owner:          owner,
+				StargazerCount: repo.StargazerCount,
+			},
 		}
 	}
 
 	// 按PR数排序
-	repos := make([]*model.GitHubRepository, 0, len(prRepoMap))
-	for _, r := range prRepoMap {
-		repos = append(repos, r)
+	projects := make([]*model.GitHubTopProject, 0, len(prRepoMap))
+	for _, p := range prRepoMap {
+		projects = append(projects, p)
 	}
-	sort.Slice(repos, func(i, j int) bool {
-		return repos[i].PullRequests > repos[j].PullRequests
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].PullRequests > projects[j].PullRequests
 	})
 
-	for _, r := range repos {
-		if len(card.TopProjects) >= 10 {
+	for _, p := range projects {
+		if len(card.Projects) >= 10 {
 			break
 		}
-		card.TopProjects = append(card.TopProjects, *r)
+		card.Projects = append(card.Projects, *p)
 	}
 
 	// 如果没有PR贡献项目，用自己的仓库填充
-	if len(card.TopProjects) == 0 {
+	if len(card.Projects) == 0 {
 		for _, repo := range user.TopRepos.Nodes {
-			if len(card.TopProjects) >= 10 {
+			if len(card.Projects) >= 10 {
 				break
 			}
-			topics := make([]string, 0)
-			for _, t := range repo.RepositoryTopics.Nodes {
-				topics = append(topics, t.Topic.Name)
+			// 提取 owner
+			var owner *model.GitHubRepoOwner
+			if parts := strings.Split(repo.NameWithOwner, "/"); len(parts) >= 1 {
+				ownerLogin := parts[0]
+				avatarURL := repo.Owner.AvatarURL
+				if avatarURL == "" {
+					avatarURL = fmt.Sprintf("https://avatars.githubusercontent.com/%s", ownerLogin)
+				}
+				owner = &model.GitHubRepoOwner{
+					AvatarURL: avatarURL,
+				}
 			}
-			card.TopProjects = append(card.TopProjects, model.GitHubRepository{
-				Name:        repo.Name,
-				FullName:    repo.NameWithOwner,
-				Description: repo.Description,
-				URL:         repo.URL,
-				Stars:       repo.StargazerCount,
-				Forks:       repo.ForkCount,
-				Language:    repo.PrimaryLanguage.Name,
-				Topics:      topics,
-				IsOwner:     true,
+			card.Projects = append(card.Projects, model.GitHubTopProject{
+				PullRequests: 0, // 自己的仓库没有PR贡献数
+				Repository: &model.GitHubTopProjectRepo{
+					URL:            repo.URL,
+					Name:           repo.Name,
+					Description:    repo.Description,
+					Owner:          owner,
+					StargazerCount: repo.StargazerCount,
+				},
 			})
 		}
 	}
 
-	// Most valuable PR
-	if len(user.PullRequestsTop.Nodes) > 0 {
-		// 简单选最大改动的
-		var bestPR *fetcher.GitHubPRNode
-		var bestImpact int
-		for i := range user.PullRequestsTop.Nodes {
-			pr := &user.PullRequestsTop.Nodes[i]
-			impact := pr.Additions + pr.Deletions
-			if impact > bestImpact {
-				bestImpact = impact
-				bestPR = pr
-			}
-		}
-		if bestPR != nil {
-			card.MostValuablePullRequest = &model.GitHubPullRequest{
-				Title:      bestPR.Title,
-				URL:        bestPR.URL,
-				Repository: bestPR.Repository.NameWithOwner,
-				Additions:  bestPR.Additions,
-				Deletions:  bestPR.Deletions,
-			}
+	return card
+}
+
+// buildMostValuablePRCard 构建most valuable PR card
+func (s *GitHubService) buildMostValuablePRCard(ctx context.Context, user *fetcher.GitHubUserData) *model.GitHubMostValuablePRCard {
+	if len(user.PullRequestsTop.Nodes) == 0 {
+		return nil
+	}
+
+	// 选最大改动的PR
+	var bestPR *fetcher.GitHubPRNode
+	var bestImpact int
+	for i := range user.PullRequestsTop.Nodes {
+		pr := &user.PullRequestsTop.Nodes[i]
+		impact := pr.Additions + pr.Deletions
+		if impact > bestImpact {
+			bestImpact = impact
+			bestPR = pr
 		}
 	}
 
-	return card
+	if bestPR == nil {
+		return nil
+	}
+
+	// 生成 PR reason 和 impact
+	reason, impact := s.generatePRReasonAndImpact(ctx, bestPR)
+
+	return &model.GitHubMostValuablePRCard{
+		Repository: bestPR.Repository.NameWithOwner,
+		URL:        bestPR.URL,
+		Title:      bestPR.Title,
+		Additions:  bestPR.Additions,
+		Deletions:  bestPR.Deletions,
+		Reason:     reason,
+		Impact:     impact,
+	}
+}
+
+// generatePRReasonAndImpact 生成PR价值原因和影响
+func (s *GitHubService) generatePRReasonAndImpact(ctx context.Context, pr *fetcher.GitHubPRNode) (reason, impact string) {
+	prompt := fmt.Sprintf(`Analyze this Pull Request and provide:
+1. reason: A concise explanation (1-2 sentences) of why this PR is valuable
+2. impact: A brief description (max 20 words) of what this PR contributes or changes
+
+PR Title: %s
+Repository: %s (Stars: %d)
+Changes: +%d/-%d lines
+
+Return ONLY valid JSON with this exact structure:
+{"reason": "...", "impact": "..."}`,
+		pr.Title,
+		pr.Repository.NameWithOwner,
+		pr.Repository.StargazerCount,
+		pr.Additions,
+		pr.Deletions)
+
+	response, err := s.llmClient.Chat(ctx, "You analyze GitHub pull requests. Return only valid JSON.", prompt)
+	if err != nil {
+		return "Significant code contribution to a popular repository.",
+			"Enhances functionality with substantial code changes."
+	}
+
+	// 解析 JSON 响应
+	type prAnalysis struct {
+		Reason string `json:"reason"`
+		Impact string `json:"impact"`
+	}
+
+	var result prAnalysis
+	// 清理可能的 markdown 代码块
+	response = strings.TrimSpace(response)
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	if err := json.Unmarshal([]byte(response), &result); err != nil {
+		// JSON 解析失败，返回默认值
+		return "Significant code contribution to a popular repository.",
+			"Enhances functionality with substantial code changes."
+	}
+
+	// 限制长度
+	if len(result.Reason) > 200 {
+		result.Reason = result.Reason[:197] + "..."
+	}
+	if len(result.Impact) > 100 {
+		result.Impact = result.Impact[:97] + "..."
+	}
+
+	return result.Reason, result.Impact
 }
 
 // generateRoleModel 生成role model card

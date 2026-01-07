@@ -6,18 +6,21 @@ import "encoding/json"
 type GitHubCardType string
 
 const (
-	GitHubCardProfile   GitHubCardType = "profile_card"
-	GitHubCardActivity  GitHubCardType = "activity_card"
-	GitHubCardRepos     GitHubCardType = "repos_card"
-	GitHubCardRoleModel GitHubCardType = "role_model_card"
-	GitHubCardRoast     GitHubCardType = "roast_card"
-	GitHubCardSummary   GitHubCardType = "summary_card"
+	GitHubCardProfile        GitHubCardType = "profile_card"
+	GitHubCardActivity       GitHubCardType = "activity_card"
+	GitHubCardFeatureProject GitHubCardType = "feature_project_card"
+	GitHubCardTopProjects    GitHubCardType = "top_projects_card"
+	GitHubCardMostValuablePR GitHubCardType = "most_valuable_pr_card"
+	GitHubCardRoleModel      GitHubCardType = "role_model_card"
+	GitHubCardRoast          GitHubCardType = "roast_card"
+	GitHubCardValuation      GitHubCardType = "valuation_card"
 )
 
 // AllGitHubCards 所有GitHub卡片类型
 var AllGitHubCards = []GitHubCardType{
-	GitHubCardProfile, GitHubCardActivity, GitHubCardRepos,
-	GitHubCardRoleModel, GitHubCardRoast, GitHubCardSummary,
+	GitHubCardProfile, GitHubCardActivity, GitHubCardFeatureProject,
+	GitHubCardTopProjects, GitHubCardMostValuablePR,
+	GitHubCardRoleModel, GitHubCardRoast, GitHubCardValuation,
 }
 
 // GitHubCardMap 并发安全的GitHub card状态map
@@ -83,20 +86,21 @@ func NewGitHubAnalysisState(login string) *GitHubAnalysisState {
 
 // GitHubProfileCard GitHub个人资料卡片
 type GitHubProfileCard struct {
-	Login       string `json:"login"`
-	Name        string `json:"name"`
-	AvatarURL   string `json:"avatar_url"`
-	URL         string `json:"url"`
-	Bio         string `json:"bio,omitempty"`
-	Company     string `json:"company,omitempty"`
-	Location    string `json:"location,omitempty"`
-	Email       string `json:"email,omitempty"`
-	Blog        string `json:"blog,omitempty"`
-	TwitterUser string `json:"twitter_username,omitempty"`
-	Followers   int    `json:"followers"`
-	Following   int    `json:"following"`
-	PublicRepos int    `json:"public_repos"`
-	CreatedAt   string `json:"created_at"`
+	Login        string   `json:"login"`
+	Name         string   `json:"name"`
+	AvatarURL    string   `json:"avatar_url"`
+	URL          string   `json:"url"`
+	Bio          string   `json:"bio,omitempty"`
+	Company      string   `json:"company,omitempty"`
+	Location     string   `json:"location,omitempty"`
+	Email        string   `json:"email,omitempty"`
+	Blog         string   `json:"blog,omitempty"`
+	TwitterUser  string   `json:"twitter_username,omitempty"`
+	Followers    int      `json:"followers"`
+	Following    int      `json:"following"`
+	PublicRepos  int      `json:"public_repos"`
+	CreatedAt    string   `json:"created_at"`
+	PersonalTags []string `json:"personal_tags,omitempty"`
 }
 
 // ========== Activity Card ==========
@@ -138,40 +142,61 @@ type GitHubActivityCard struct {
 	CodeContribution GitHubCodeContribution `json:"code_contribution"`
 }
 
-// ========== Repos Card ==========
+// ========== Feature Project Card ==========
 
-// GitHubRepository GitHub仓库信息
-type GitHubRepository struct {
-	Name            string   `json:"name"`
-	FullName        string   `json:"full_name,omitempty"`
-	Description     string   `json:"description,omitempty"`
-	URL             string   `json:"url"`
-	Stars           int      `json:"stars"`
-	Forks           int      `json:"forks"`
-	Language        string   `json:"language,omitempty"`
-	Topics          []string `json:"topics,omitempty"`
-	IsOwner         bool     `json:"is_owner"`
-	PullRequests    int      `json:"pull_requests,omitempty"`    // 用户的PR数
-	ContributionPct float64  `json:"contribution_pct,omitempty"` // 贡献占比
+// GitHubRepoOwner 仓库所有者信息
+type GitHubRepoOwner struct {
+	AvatarURL string `json:"avatarUrl,omitempty"`
 }
 
-// GitHubPullRequest GitHub PR信息
-type GitHubPullRequest struct {
-	Title      string `json:"title"`
-	URL        string `json:"url"`
+// GitHubFeatureProjectCard Feature Project卡片
+type GitHubFeatureProjectCard struct {
+	UsedBy          int              `json:"used_by"`
+	Contributors    int              `json:"contributors"`
+	MonthlyTrending int              `json:"monthly_trending"`
+	Name            string           `json:"name"`
+	NameWithOwner   string           `json:"nameWithOwner"`
+	URL             string           `json:"url"`
+	Description     string           `json:"description,omitempty"`
+	Owner           *GitHubRepoOwner `json:"owner,omitempty"`
+	StargazerCount  int              `json:"stargazerCount"`
+	ForkCount       int              `json:"forkCount"`
+	Tags            []string         `json:"tags,omitempty"`
+}
+
+// ========== Top Projects Card ==========
+
+// GitHubTopProjectRepo Top Project中的仓库信息
+type GitHubTopProjectRepo struct {
+	URL            string           `json:"url"`
+	Name           string           `json:"name"`
+	Description    string           `json:"description,omitempty"`
+	Owner          *GitHubRepoOwner `json:"owner,omitempty"`
+	StargazerCount int              `json:"stargazerCount"`
+}
+
+// GitHubTopProject Top Project贡献信息
+type GitHubTopProject struct {
+	PullRequests int                   `json:"pull_requests"`
+	Repository   *GitHubTopProjectRepo `json:"repository"`
+}
+
+// GitHubTopProjectsCard Top Projects卡片
+type GitHubTopProjectsCard struct {
+	Projects []GitHubTopProject `json:"projects"`
+}
+
+// ========== Most Valuable PR Card ==========
+
+// GitHubMostValuablePRCard Most Valuable PR卡片
+type GitHubMostValuablePRCard struct {
 	Repository string `json:"repository"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
 	Additions  int    `json:"additions"`
 	Deletions  int    `json:"deletions"`
-	Comments   int    `json:"comments"`
-	MergedAt   string `json:"merged_at,omitempty"`
-	State      string `json:"state"`
-}
-
-// GitHubReposCard GitHub仓库卡片
-type GitHubReposCard struct {
-	FeatureProject          *GitHubRepository  `json:"feature_project,omitempty"`
-	TopProjects             []GitHubRepository `json:"top_projects"`
-	MostValuablePullRequest *GitHubPullRequest `json:"most_valuable_pull_request,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Impact     string `json:"impact,omitempty"`
 }
 
 // ========== Role Model Card ==========

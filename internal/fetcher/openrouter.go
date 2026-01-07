@@ -48,6 +48,11 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
+// Chat 通用聊天方法（公开）
+func (o *OpenRouterClient) Chat(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return o.chat(ctx, systemPrompt, userPrompt)
+}
+
 func (o *OpenRouterClient) chat(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	reqBody := chatRequest{
 		Model: o.model,
