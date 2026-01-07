@@ -144,7 +144,7 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 	// 缓存结果
 	if s.cache != nil {
 		cacheData := make(map[string]interface{})
-		cacheData["profile"] = profileCard
+		cacheData[string(model.GitHubCardProfile)] = profileCard
 		for cardType, cardData := range results {
 			cacheData[string(cardType)] = cardData
 		}
