@@ -846,14 +846,15 @@ func (s *LinkedInService) generateRoleModelCard(ctx context.Context, data *fetch
 	isCelebrity, celebrityReason := s.checkIfCelebrity(ctx, data, personName)
 
 	if isCelebrity {
-		// 如果用户是名人，返回自己作为榜样
+		// 如果用户是名人，返回自己作为榜样（生成丰富的成就描述）
+		achievement := s.createEnhancedSelfAchievement(data, personName)
 		return &model.LinkedInRoleModelCard{
 			Name:             personName,
 			Institution:      data.CompanyName,
 			Position:         data.GetHeadline(),
 			PhotoURL:         data.GetPhotoURL(),
-			Achievement:      fmt.Sprintf("%s at %s", data.GetHeadline(), data.CompanyName),
-			SimilarityReason: fmt.Sprintf("You are already a notable figure and industry leader. %s Your achievements make you an inspiration to others.", celebrityReason),
+			Achievement:      achievement,
+			SimilarityReason: fmt.Sprintf("🌟 Congratulations! You are already a notable figure and industry leader. %s Your achievements make you an inspiration to others.", celebrityReason),
 			IsCelebrity:      true,
 			CelebrityReason:  celebrityReason,
 		}, nil
@@ -866,19 +867,127 @@ func (s *LinkedInService) generateRoleModelCard(ctx context.Context, data *fetch
 		return roleModel, nil
 	}
 
-	// 完全找不到匹配时，fallback到自己
+	// 完全找不到匹配时，fallback到自己（生成基于profile的成就描述）
 	log.Printf("[LinkedIn RoleModel] No matching celebrity found, using self")
+	achievement := s.createSelfAchievement(data, personName)
 	celebrityExplanation := s.generateCelebrityReasoning(ctx, data, personName)
 	return &model.LinkedInRoleModelCard{
 		Name:             personName,
 		Institution:      data.CompanyName,
 		Position:         data.GetHeadline(),
 		PhotoURL:         data.GetPhotoURL(),
-		Achievement:      "Professional",
+		Achievement:      achievement,
 		SimilarityReason: "You are already your own role model! Your unique career path and professional achievements make you an inspiration to others in your field.",
 		IsCelebrity:      false,
 		CelebrityReason:  celebrityExplanation,
 	}, nil
+}
+
+// createSelfAchievement 为非名人用户创建成就描述（基于profile数据）
+func (s *LinkedInService) createSelfAchievement(data *fetcher.LinkedInProfileData, personName string) string {
+	var parts []string
+
+	// 1. 当前职位
+	headline := data.GetHeadline()
+	company := data.CompanyName
+	if headline != "" && company != "" {
+		parts = append(parts, fmt.Sprintf("%s at %s", headline, company))
+	} else if headline != "" {
+		parts = append(parts, headline)
+	}
+
+	// 2. 连接数指标
+	if data.Connections > 5000 {
+		parts = append(parts, fmt.Sprintf("influential professional with %d+ connections", data.Connections))
+	} else if data.Connections > 1000 {
+		parts = append(parts, fmt.Sprintf("well-connected professional with %d+ connections", data.Connections))
+	}
+
+	// 3. 粉丝数指标
+	if data.Followers > 10000 {
+		parts = append(parts, fmt.Sprintf("thought leader with %d+ followers", data.Followers))
+	}
+
+	// 4. 领导力指标（根据headline判断）
+	headlineLower := strings.ToLower(headline)
+	if strings.Contains(headlineLower, "founder") || strings.Contains(headlineLower, "ceo") ||
+		strings.Contains(headlineLower, "chief") || strings.Contains(headlineLower, "president") {
+		parts = append(parts, "executive leader driving organizational success")
+	}
+
+	// 5. 专业认可指标（根据about判断）
+	aboutLower := strings.ToLower(data.About)
+	if strings.Contains(aboutLower, "award") || strings.Contains(aboutLower, "recognition") ||
+		strings.Contains(aboutLower, "speaker") || strings.Contains(aboutLower, "expert") {
+		parts = append(parts, "recognized expert in their field")
+	}
+	if strings.Contains(aboutLower, "bestselling") || strings.Contains(aboutLower, "published") ||
+		strings.Contains(aboutLower, "author") {
+		parts = append(parts, "published thought leader")
+	}
+
+	if len(parts) == 0 {
+		return "Dedicated professional making an impact in their industry"
+	}
+
+	return strings.Join(parts, "; ")
+}
+
+// createEnhancedSelfAchievement 为名人用户创建增强版成就描述
+func (s *LinkedInService) createEnhancedSelfAchievement(data *fetcher.LinkedInProfileData, personName string) string {
+	var parts []string
+
+	// 1. 当前职位
+	headline := data.GetHeadline()
+	company := data.CompanyName
+	if headline != "" && company != "" {
+		parts = append(parts, fmt.Sprintf("%s at %s", headline, company))
+	} else if headline != "" {
+		parts = append(parts, headline)
+	}
+
+	// 2. 影响力指标（针对名人更高的阈值）
+	if data.Followers > 100000 {
+		parts = append(parts, "influential thought leader shaping industry discourse")
+	} else if data.Followers > 50000 {
+		parts = append(parts, "recognized industry voice with significant following")
+	} else if data.Followers > 10000 {
+		parts = append(parts, fmt.Sprintf("thought leader with %d+ followers", data.Followers))
+	}
+
+	// 3. 高管指标
+	headlineLower := strings.ToLower(headline)
+	if strings.Contains(headlineLower, "cto") || strings.Contains(headlineLower, "vp") ||
+		strings.Contains(headlineLower, "vice president") || strings.Contains(headlineLower, "director") {
+		parts = append(parts, "senior executive shaping organizational strategy")
+	}
+
+	// 4. 创始人/CEO指标
+	if strings.Contains(headlineLower, "founder") || strings.Contains(headlineLower, "co-founder") {
+		parts = append(parts, "visionary founder building innovative solutions")
+	}
+	if strings.Contains(headlineLower, "ceo") || strings.Contains(headlineLower, "chief executive") {
+		parts = append(parts, "executive leader at the helm of organizational growth")
+	}
+
+	// 5. 专业认可指标
+	aboutLower := strings.ToLower(data.About)
+	if strings.Contains(aboutLower, "award") || strings.Contains(aboutLower, "recognition") {
+		parts = append(parts, "award-winning professional")
+	}
+	if strings.Contains(aboutLower, "speaker") || strings.Contains(aboutLower, "keynote") {
+		parts = append(parts, "sought-after industry speaker")
+	}
+	if strings.Contains(aboutLower, "bestselling") || strings.Contains(aboutLower, "published") ||
+		strings.Contains(aboutLower, "author") {
+		parts = append(parts, "published thought leader and author")
+	}
+
+	if len(parts) == 0 {
+		return "Industry leader and recognized professional making significant impact"
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 // findMatchingCelebrity 从CSV名人列表中找最相似的
