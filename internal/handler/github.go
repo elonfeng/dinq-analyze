@@ -22,6 +22,7 @@ func NewGitHubHandler(svc *service.GitHubService) *GitHubHandler {
 // AnalyzeSSE 处理SSE分析请求
 // POST /api/analyze/github/sse
 // Body: {"query": "xxx", "data": {...}}
+// Header: X-User-ID (可选，来自gateway鉴权)
 func (h *GitHubHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 	var req AnalyzeRequest
 
@@ -36,6 +37,10 @@ func (h *GitHubHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 从 header 获取用户ID（gateway 鉴权后会设置 X-User-ID）
+	userID := r.Header.Get("X-User-ID")
+	isLoggedIn := userID != ""
+
 	// 创建SSE writer
 	writer, err := sse.NewGitHubWriter(w)
 	if err != nil {
@@ -44,10 +49,11 @@ func (h *GitHubHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	defer writer.StopHeartbeat()
 
-	log.Printf("Starting GitHub SSE analysis for: %s", req.Query)
+	log.Printf("Starting GitHub SSE analysis for: %s (logged_in: %v)", req.Query, isLoggedIn)
 
-	// 执行分析 (data暂不使用，保留接口兼容)
-	if err := h.service.Analyze(r.Context(), req.Query, writer); err != nil {
+	// 执行分析
+	// cacheOnly: 未登录时只走缓存，没缓存返回需要登录的错误
+	if err := h.service.Analyze(r.Context(), req.Query, writer, !isLoggedIn); err != nil {
 		log.Printf("GitHub analysis error for %s: %v", req.Query, err)
 	}
 

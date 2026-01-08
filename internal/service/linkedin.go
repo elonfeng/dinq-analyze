@@ -44,7 +44,8 @@ func NewLinkedInService(tavilyAPIKey, apifyAPIKey, openRouterAPIKey string, c ca
 
 // AnalyzeWithSSE 执行LinkedIn分析并通过SSE推送结果
 // candidateData: 用户选择的候选人数据 {linkedin_id, name, content, url}
-func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, candidateData map[string]interface{}, w *sse.LinkedInWriter) error {
+// cacheOnly: 如果为true，只走缓存，没缓存返回登录错误（用于未登录用户）
+func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, candidateData map[string]interface{}, w *sse.LinkedInWriter, cacheOnly bool) error {
 	// Step 1: 确定LinkedIn URL
 	var linkedinURL string
 	var personName string
@@ -79,7 +80,12 @@ func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, cand
 			linkedinURL = query
 			personName = fetcher.ExtractLinkedInID(query)
 		} else {
-			// 搜索LinkedIn
+			// 搜索LinkedIn - 未登录用户不允许搜索
+			if cacheOnly {
+				w.SendLoginRequired("Please login to search LinkedIn profiles by name")
+				return nil
+			}
+
 			personName = query
 			w.SetAction(5, "Searching LinkedIn profile...")
 			results, err := s.linkedinClient.SearchLinkedInURL(ctx, query)
@@ -143,6 +149,13 @@ func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, cand
 			return s.sendCachedResult(w, cached.Data, linkedinID, personName, linkedinURL)
 		}
 		log.Printf("[LinkedIn] Cache MISS for: %s (err=%v)", linkedinURL, err)
+	}
+
+	// 如果是 cacheOnly 模式（未登录）且没有缓存，返回需要登录的错误
+	if cacheOnly {
+		log.Printf("[LinkedIn] Cache MISS and cacheOnly=true, requiring login for: %s", linkedinURL)
+		w.SendLoginRequired("Please login to analyze this LinkedIn profile")
+		return nil
 	}
 
 	w.SetAction(10, "Fetching LinkedIn profile data...")

@@ -35,7 +35,8 @@ func NewGitHubService(githubToken, openrouterKey string, c cache.Cache) *GitHubS
 }
 
 // Analyze 分析GitHub用户
-func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHubWriter) error {
+// cacheOnly: 如果为true，只走缓存，没缓存返回登录错误（用于未登录用户）
+func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHubWriter, cacheOnly bool) error {
 	if err := w.SetLogin(login); err != nil {
 		log.Printf("[GitHub] Failed to send initial SSE: %v", err)
 	}
@@ -48,6 +49,13 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 			w.SetAction(100, "Loaded from cache")
 			return s.sendCachedResult(w, cached.Data)
 		}
+	}
+
+	// 如果是 cacheOnly 模式（未登录）且没有缓存，返回需要登录的错误
+	if cacheOnly {
+		log.Printf("[GitHub] Cache MISS and cacheOnly=true, requiring login for: %s", login)
+		w.SendLoginRequired("Please login to analyze this GitHub profile")
+		return nil
 	}
 
 	// 获取GitHub数据

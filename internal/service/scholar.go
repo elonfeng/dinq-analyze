@@ -84,8 +84,9 @@ func extractScholarIDFromURL(url string) string {
 
 // Analyze 分析学者
 // query: 可以是scholar_id、Google Scholar URL或者人名
-func (s *ScholarService) Analyze(ctx context.Context, query string, w *sse.Writer) error {
-	log.Printf("[Scholar Service] Analyze started, query: %s", query)
+// cacheOnly: 如果为true，只走缓存，没缓存返回登录错误（用于未登录用户）
+func (s *ScholarService) Analyze(ctx context.Context, query string, w *sse.Writer, cacheOnly bool) error {
+	log.Printf("[Scholar Service] Analyze started, query: %s, cacheOnly: %v", query, cacheOnly)
 
 	// 设置query
 	w.SetQuery(query)
@@ -104,6 +105,12 @@ func (s *ScholarService) Analyze(ctx context.Context, query string, w *sse.Write
 		w.SetAction(5, "Scholar ID detected, starting analysis...")
 	} else {
 		// 是人名，需要搜索
+		// 未登录用户不允许搜索（因为搜索没有缓存）
+		if cacheOnly {
+			w.SendLoginRequired("Please login to search scholars by name")
+			return nil
+		}
+
 		w.SetAction(5, "Searching for scholar candidates...")
 
 		candidates, err := s.searchFetcher.SearchScholar(ctx, query)
@@ -141,7 +148,7 @@ func (s *ScholarService) Analyze(ctx context.Context, query string, w *sse.Write
 	}
 
 	// 开始分析
-	return s.analyzeScholar(ctx, scholarID, w)
+	return s.analyzeScholar(ctx, scholarID, w, cacheOnly)
 }
 
 // summarizeCandidatesContent 并发总结候选人的content为简短英文
@@ -167,8 +174,9 @@ func (s *ScholarService) summarizeCandidatesContent(ctx context.Context, candida
 }
 
 // analyzeScholar 执行实际的分析
-func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w *sse.Writer) error {
-	log.Printf("[Scholar Service] analyzeScholar started for ID: %s", scholarID)
+// cacheOnly: 如果为true，只走缓存，没缓存返回登录错误
+func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w *sse.Writer, cacheOnly bool) error {
+	log.Printf("[Scholar Service] analyzeScholar started for ID: %s, cacheOnly: %v", scholarID, cacheOnly)
 
 	// ========== 发送 start 消息 ==========
 	w.SetAction(0, "Starting analysis...")
@@ -190,6 +198,13 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 			return s.sendCachedResults(ctx, w, cached.Data)
 		}
 		log.Printf("[Scholar Service] Cache MISS for ID: %s", scholarID)
+	}
+
+	// 如果是 cacheOnly 模式（未登录）且没有缓存，返回需要登录的错误
+	if cacheOnly {
+		log.Printf("[Scholar Service] Cache MISS and cacheOnly=true, requiring login for ID: %s", scholarID)
+		w.SendLoginRequired("Please login to analyze this scholar")
+		return nil
 	}
 
 	var wg sync.WaitGroup

@@ -22,6 +22,7 @@ func NewLinkedInHandler(svc *service.LinkedInService) *LinkedInHandler {
 // AnalyzeSSE 处理SSE分析请求
 // POST /api/analyze/linkedin/sse
 // Body: {"query": "xxx", "data": {...}}
+// Header: X-User-ID (可选，来自gateway鉴权)
 // data: 用户选择的候选人信息 {linkedin_id, name, content, url}
 func (h *LinkedInHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 	var req AnalyzeRequest
@@ -37,6 +38,10 @@ func (h *LinkedInHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 从 header 获取用户ID（gateway 鉴权后会设置 X-User-ID）
+	userID := r.Header.Get("X-User-ID")
+	isLoggedIn := userID != ""
+
 	// 创建SSE writer
 	writer, err := sse.NewLinkedInWriter(w)
 	if err != nil {
@@ -45,10 +50,11 @@ func (h *LinkedInHandler) AnalyzeSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	defer writer.StopHeartbeat()
 
-	log.Printf("Starting LinkedIn SSE analysis for: %s (with data: %v)", req.Query, req.Data != nil)
+	log.Printf("Starting LinkedIn SSE analysis for: %s (logged_in: %v, with data: %v)", req.Query, isLoggedIn, req.Data != nil)
 
 	// 执行分析，传递候选人数据
-	if err := h.service.AnalyzeWithSSE(r.Context(), req.Query, req.Data, writer); err != nil {
+	// cacheOnly: 未登录时只走缓存，没缓存返回需要登录的错误
+	if err := h.service.AnalyzeWithSSE(r.Context(), req.Query, req.Data, writer, !isLoggedIn); err != nil {
 		log.Printf("LinkedIn analysis error for %s: %v", req.Query, err)
 		writer.SendGlobalError(err.Error())
 	}

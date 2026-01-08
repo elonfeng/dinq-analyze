@@ -158,6 +158,17 @@ func (s *Writer) SendGlobalError(errMsg string) error {
 	return s.send()
 }
 
+// SendLoginRequired 发送需要登录的错误（未登录用户且无缓存时）
+func (s *Writer) SendLoginRequired(message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.state.Status = "login_required"
+	s.state.CurrentAction = "Login required"
+	s.state.Error = message
+	return s.send()
+}
+
 // Done 全部完成
 func (s *Writer) Done() error {
 	s.mu.Lock()
@@ -333,6 +344,17 @@ func (g *GitHubWriter) SendGlobalError(errMsg string) error {
 	return g.send()
 }
 
+// SendLoginRequired 发送需要登录的错误（未登录用户且无缓存时）
+func (g *GitHubWriter) SendLoginRequired(message string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.state.Status = "login_required"
+	g.state.CurrentAction = "Login required"
+	g.state.Error = message
+	return g.send()
+}
+
 // SendCompleted 发送完成
 func (g *GitHubWriter) SendCompleted() error {
 	g.mu.Lock()
@@ -501,6 +523,17 @@ func (l *LinkedInWriter) SendGlobalError(errMsg string) error {
 	l.state.Status = "error"
 	l.state.CurrentAction = "Analysis failed"
 	l.state.Error = errMsg
+	return l.send()
+}
+
+// SendLoginRequired 发送需要登录的错误（未登录用户且无缓存时）
+func (l *LinkedInWriter) SendLoginRequired(message string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.state.Status = "login_required"
+	l.state.CurrentAction = "Login required"
+	l.state.Error = message
 	return l.send()
 }
 
