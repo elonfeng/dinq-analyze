@@ -223,7 +223,7 @@ type GitHubRoastCard struct {
 // GitHubValuationLevel GitHub估值等级
 type GitHubValuationLevel struct {
 	Level           string  `json:"level"`            // e.g. "L5"
-	SalaryRange     []int   `json:"salary_range"`     // e.g. [210000, 250000]
+	Salary          int     `json:"salary"`           // e.g. 250000
 	IndustryRanking float64 `json:"industry_ranking"` // e.g. 0.25 = top 25%
 	GrowthPotential string  `json:"growth_potential"` // e.g. "High"
 	Reasoning       string  `json:"reasoning"`

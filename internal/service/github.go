@@ -83,6 +83,17 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 		}
 	}()
 
+	// 获取commit mutations（并发启动）
+	commitMutationsChan := make(chan *fetcher.CommitMutations, 1)
+	go func() {
+		mutations, err := s.githubClient.FetchCommitMutations(ctx, userData.Login, userData.ID)
+		if err != nil {
+			commitMutationsChan <- nil
+		} else {
+			commitMutationsChan <- mutations
+		}
+	}()
+
 	// 发送profile card（第一个，同步，包含AI生成的标签）
 	w.SetAction(20, "Processing profile...")
 	profileCard := s.buildProfileCard(ctx, userData)
@@ -95,11 +106,12 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 
 	w.SetAction(30, "Running analysis...")
 
-	// Activity card
+	// Activity card (等待commit mutations)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		activityCard := s.buildActivityCard(userData)
+		commitMutations := <-commitMutationsChan
+		activityCard := s.buildActivityCard(userData, commitMutations)
 		w.SendCardDone(model.GitHubCardActivity, activityCard)
 		resultsMu.Lock()
 		results[model.GitHubCardActivity] = activityCard
@@ -363,7 +375,7 @@ Return only a comma-separated list of 3 tags, no JSON. Example: Open Source, Pyt
 }
 
 // buildActivityCard 构建activity card
-func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData) *model.GitHubActivityCard {
+func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData, commitMutations *fetcher.CommitMutations) *model.GitHubActivityCard {
 	// 计算工作年限
 	var workExp int
 	if user.CreatedAt != "" {
@@ -379,7 +391,7 @@ func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData) *model.G
 		totalStars += repo.StargazerCount
 	}
 
-	// 统计活动
+	// 统计活动（绿色贡献图）
 	var activeDays int
 	activity := make([]model.GitHubDailyActivity, 0)
 	for _, week := range user.ContributionsCollection.ContributionCalendar.Weeks {
@@ -394,18 +406,17 @@ func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData) *model.G
 		}
 	}
 
-	// 估算代码贡献和语言统计（采样后按比例放大）
-	var sampleAdditions, sampleDeletions int
-	sampleLanguages := make(map[string]int)
-
+	// PR mutations（采样后按比例放大）
+	var prAdditions, prDeletions int
+	prLanguages := make(map[string]int)
 	sampleCount := len(user.PullRequestsTop.Nodes)
 	totalPRCount := user.PullRequests.TotalCount
 
 	for _, pr := range user.PullRequestsTop.Nodes {
-		sampleAdditions += pr.Additions
-		sampleDeletions += pr.Deletions
+		prAdditions += pr.Additions
+		prDeletions += pr.Deletions
 
-		// 按语言统计（按PR代码量比例分配）
+		// 按语言统计
 		prTotal := pr.Additions + pr.Deletions
 		var langSizeSum int
 		for _, lang := range pr.Repository.Languages.Edges {
@@ -414,20 +425,34 @@ func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData) *model.G
 		if langSizeSum > 0 {
 			for _, lang := range pr.Repository.Languages.Edges {
 				ratio := float64(lang.Size) / float64(langSizeSum)
-				sampleLanguages[lang.Node.Name] += int(float64(prTotal) * ratio)
+				prLanguages[lang.Node.Name] += int(float64(prTotal) * ratio)
 			}
 		}
 	}
 
-	// 按采样数估算总量（类似Python逻辑）
-	var totalAdditions, totalDeletions int
-	languages := make(map[string]int)
+	// 按采样数估算PR总量
 	if sampleCount > 0 && totalPRCount > 0 {
 		scale := float64(totalPRCount) / float64(sampleCount)
-		totalAdditions = int(math.Round(float64(sampleAdditions) * scale))
-		totalDeletions = int(math.Round(float64(sampleDeletions) * scale))
-		for name, value := range sampleLanguages {
-			languages[name] = int(math.Round(float64(value) * scale))
+		prAdditions = int(math.Round(float64(prAdditions) * scale))
+		prDeletions = int(math.Round(float64(prDeletions) * scale))
+		for name := range prLanguages {
+			prLanguages[name] = int(math.Round(float64(prLanguages[name]) * scale))
+		}
+	}
+
+	// 合并 PR mutations + Commit mutations（与Python逻辑一致）
+	totalAdditions := prAdditions
+	totalDeletions := prDeletions
+	languages := make(map[string]int)
+	for name, value := range prLanguages {
+		languages[name] = value
+	}
+
+	if commitMutations != nil {
+		totalAdditions += commitMutations.Additions
+		totalDeletions += commitMutations.Deletions
+		for name, value := range commitMutations.Languages {
+			languages[name] += value
 		}
 	}
 
@@ -683,7 +708,7 @@ func (s *GitHubService) generateSummary(ctx context.Context, baseData map[string
 	return &model.GitHubSummaryCard{
 		ValuationAndLevel: model.GitHubValuationLevel{
 			Level:           result.Level,
-			SalaryRange:     result.SalaryRange,
+			Salary:          result.Salary,
 			IndustryRanking: result.IndustryRanking,
 			GrowthPotential: result.GrowthPotential,
 			Reasoning:       result.Reasoning,
@@ -724,23 +749,23 @@ func (s *GitHubService) defaultSummary(baseData map[string]interface{}, user *fe
 		level = "L3"
 	}
 
-	// Default salary ranges based on level
-	salaryRanges := map[string][]int{
-		"L3": {80000, 120000},
-		"L4": {120000, 160000},
-		"L5": {160000, 210000},
-		"L6": {210000, 280000},
-		"L7": {280000, 400000},
+	// Default salary based on level
+	salaries := map[string]int{
+		"L3": 100000,
+		"L4": 140000,
+		"L5": 185000,
+		"L6": 245000,
+		"L7": 340000,
 	}
-	salaryRange := salaryRanges[level]
-	if salaryRange == nil {
-		salaryRange = []int{100000, 150000}
+	salary := salaries[level]
+	if salary == 0 {
+		salary = 125000
 	}
 
 	return &model.GitHubSummaryCard{
 		ValuationAndLevel: model.GitHubValuationLevel{
 			Level:           level,
-			SalaryRange:     salaryRange,
+			Salary:          salary,
 			IndustryRanking: 0.5, // Top 50%
 			GrowthPotential: "Medium",
 			Reasoning:       fmt.Sprintf("Based on %d years of GitHub activity, %d stars, and %d pull requests.", workExp, stars, prs),

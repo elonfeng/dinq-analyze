@@ -532,7 +532,7 @@ Return in JSON format:
     },
     "level_us": "L[X]",
     "level_cn": "P[X+2]",
-    "estimated_salary": "salary range in USD, e.g., '200000-300000'",
+    "estimated_salary": [single integer value in USD, e.g., 250000],
     "explanation": "[50-70 words emphasizing competitive advantages and market value]"
 }
 
@@ -564,7 +564,7 @@ Return ONLY JSON.`,
 			},
 			LevelUS:         "L5",
 			LevelCN:         "P7",
-			EstimatedSalary: "150000-250000",
+			EstimatedSalary: 200000,
 			Explanation:     "Professional with valuable expertise in competitive market.",
 		}, nil
 	}

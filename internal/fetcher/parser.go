@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,8 +33,11 @@ type CoauthorData struct {
 
 // Parse 解析Google Scholar HTML
 func (p *ScholarParser) Parse(html string) (*ParsedProfile, error) {
+	log.Printf("[Scholar Parser] Starting to parse HTML, length: %d chars", len(html))
+
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
+		log.Printf("[Scholar Parser] ERROR: Failed to create document: %v", err)
 		return nil, err
 	}
 
@@ -41,12 +45,24 @@ func (p *ScholarParser) Parse(html string) (*ParsedProfile, error) {
 
 	// 解析Profile
 	result.Profile = p.parseProfile(doc)
+	log.Printf("[Scholar Parser] Profile parsed: name=%q, affiliation=%q, h-index=%d, citations=%d",
+		result.Profile.Name, result.Profile.Affiliation, result.Profile.HIndex, result.Profile.TotalCites)
 
 	// 解析Papers
 	result.Papers = p.parsePapers(doc)
+	log.Printf("[Scholar Parser] Papers parsed: count=%d", len(result.Papers))
 
 	// 解析Coauthors
 	result.Coauthors = p.parseCoauthors(doc)
+	log.Printf("[Scholar Parser] Coauthors parsed: count=%d", len(result.Coauthors))
+
+	// 检查是否解析到有效数据
+	if result.Profile.Name == "" {
+		log.Printf("[Scholar Parser] WARNING: No profile name found in HTML")
+	}
+	if len(result.Papers) == 0 {
+		log.Printf("[Scholar Parser] WARNING: No papers found in HTML")
+	}
 
 	return result, nil
 }
@@ -198,24 +214,35 @@ func (p *ScholarParser) ParsePapersOnly(html string) ([]PaperData, error) {
 
 // ParseMultiPage 解析多页HTML，合并论文
 func (p *ScholarParser) ParseMultiPage(htmlPages []string) (*ParsedProfile, error) {
+	log.Printf("[Scholar Parser] ParseMultiPage: received %d pages", len(htmlPages))
+
 	if len(htmlPages) == 0 {
+		log.Printf("[Scholar Parser] ERROR: No HTML pages to parse")
 		return nil, nil
 	}
 
 	// 第一页包含完整profile信息
 	result, err := p.Parse(htmlPages[0])
 	if err != nil {
+		log.Printf("[Scholar Parser] ERROR: Failed to parse first page: %v", err)
 		return nil, err
 	}
+
+	initialPaperCount := len(result.Papers)
 
 	// 后续页只提取论文并合并
 	for i := 1; i < len(htmlPages); i++ {
 		papers, err := p.ParsePapersOnly(htmlPages[i])
 		if err != nil {
+			log.Printf("[Scholar Parser] WARNING: Failed to parse page %d: %v", i+1, err)
 			continue // 忽略解析失败的页面
 		}
+		log.Printf("[Scholar Parser] Page %d: found %d additional papers", i+1, len(papers))
 		result.Papers = append(result.Papers, papers...)
 	}
+
+	log.Printf("[Scholar Parser] ParseMultiPage complete: total %d papers (first page: %d)",
+		len(result.Papers), initialPaperCount)
 
 	return result, nil
 }

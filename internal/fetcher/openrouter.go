@@ -565,7 +565,7 @@ type GitHubRoleModelResult struct {
 // GitHubValuationResult GitHub估值结果
 type GitHubValuationResult struct {
 	Level           string  `json:"level"`
-	SalaryRange     []int   `json:"salary_range"`
+	Salary          int     `json:"salary"`
 	IndustryRanking float64 `json:"industry_ranking"`
 	GrowthPotential string  `json:"growth_potential"`
 	Reasoning       string  `json:"reasoning"`
@@ -699,7 +699,7 @@ GitHub-Specific Premium Multipliers (stack generously):
 Return ONLY a valid JSON object with this exact structure:
 {
     "level": "L4",
-    "salary_range": [210000, 250000],
+    "salary": 230000,
     "industry_ranking": 0.25,
     "growth_potential": "High",
     "reasoning": "50-70 word justification emphasizing competitive advantages, GitHub impact, technical expertise, and market scarcity that drives premium compensation"
@@ -707,7 +707,7 @@ Return ONLY a valid JSON object with this exact structure:
 
 Field Specifications:
 - level: Google engineering level (L3-L8+)
-- salary_range: Total annual compensation range as array of two numbers (e.g., [400000, 500000])
+- salary: Total annual compensation as a single integer (e.g., 400000)
 - industry_ranking: Decimal representing percentile (0.05 = top 5%, 0.25 = top 25%)
 - growth_potential: Qualitative assessment based on trajectory and specialization
 - reasoning: Concise English explanation highlighting why this developer commands premium compensation in current market
@@ -726,6 +726,12 @@ FINAL REMINDER: Be AGGRESSIVE in valuation. Exceptional open source contributors
 	var result GitHubValuationResult
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, err
+	}
+
+	// Cap salary at $2.5M
+	const maxCap = 2500000
+	if result.Salary > maxCap {
+		result.Salary = maxCap
 	}
 
 	return &result, nil

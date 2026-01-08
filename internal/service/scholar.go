@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -84,6 +85,8 @@ func extractScholarIDFromURL(url string) string {
 // Analyze 分析学者
 // query: 可以是scholar_id、Google Scholar URL或者人名
 func (s *ScholarService) Analyze(ctx context.Context, query string, w *sse.Writer) error {
+	log.Printf("[Scholar Service] Analyze started, query: %s", query)
+
 	// 设置query
 	w.SetQuery(query)
 
@@ -92,10 +95,12 @@ func (s *ScholarService) Analyze(ctx context.Context, query string, w *sse.Write
 	// 1. 先检查是否是 Google Scholar URL
 	if urlID := extractScholarIDFromURL(query); urlID != "" {
 		scholarID = urlID
+		log.Printf("[Scholar Service] Extracted scholar ID from URL: %s", scholarID)
 		w.SetAction(5, "Scholar URL detected, starting analysis...")
 	} else if isScholarID(query) {
 		// 2. 直接是scholar_id
 		scholarID = query
+		log.Printf("[Scholar Service] Query is a scholar ID: %s", scholarID)
 		w.SetAction(5, "Scholar ID detected, starting analysis...")
 	} else {
 		// 是人名，需要搜索
@@ -163,6 +168,8 @@ func (s *ScholarService) summarizeCandidatesContent(ctx context.Context, candida
 
 // analyzeScholar 执行实际的分析
 func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w *sse.Writer) error {
+	log.Printf("[Scholar Service] analyzeScholar started for ID: %s", scholarID)
+
 	// ========== 发送 start 消息 ==========
 	w.SetAction(0, "Starting analysis...")
 
@@ -178,9 +185,11 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 	if s.cache != nil {
 		cached, err := s.cache.Get(ctx, scholarID)
 		if err == nil && cached != nil {
+			log.Printf("[Scholar Service] Cache HIT for ID: %s", scholarID)
 			w.SetAction(5, "Loading from cache...")
 			return s.sendCachedResults(ctx, w, cached.Data)
 		}
+		log.Printf("[Scholar Service] Cache MISS for ID: %s", scholarID)
 	}
 
 	var wg sync.WaitGroup
@@ -200,11 +209,13 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 	go func() {
 		defer wg.Done()
 
+		log.Printf("[Scholar Service] Starting to fetch HTML pages for ID: %s", scholarID)
 		w.SetAction(15, "Fetching Google Scholar pages...")
 
 		// 并发获取多页论文（最多3页，300篇论文）
 		htmlPages, err := s.htmlFetcher.FetchScholarPageMulti(ctx, scholarID, 3)
 		if err != nil {
+			log.Printf("[Scholar Service] ERROR: Failed to fetch HTML: %v", err)
 			mu.Lock()
 			fetchErr = err
 			mu.Unlock()
@@ -213,11 +224,13 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 			return
 		}
 
+		log.Printf("[Scholar Service] Fetched %d HTML pages, starting to parse", len(htmlPages))
 		w.SetAction(25, "Parsing scholar data...")
 
 		// 解析多页HTML并合并论文
 		parsed, err := s.parser.ParseMultiPage(htmlPages)
 		if err != nil {
+			log.Printf("[Scholar Service] ERROR: Failed to parse HTML: %v", err)
 			mu.Lock()
 			fetchErr = err
 			mu.Unlock()
@@ -225,6 +238,19 @@ func (s *ScholarService) analyzeScholar(ctx context.Context, scholarID string, w
 			w.SetError(model.CardPapers, err.Error(), "Failed to parse")
 			return
 		}
+
+		// 检查解析结果
+		if parsed == nil {
+			log.Printf("[Scholar Service] ERROR: Parsed result is nil")
+			mu.Lock()
+			fetchErr = err
+			mu.Unlock()
+			w.SetError(model.CardProfile, "No data parsed", "Failed to parse")
+			return
+		}
+
+		log.Printf("[Scholar Service] Parse complete: name=%q, papers=%d, coauthors=%d, h-index=%d",
+			parsed.Profile.Name, len(parsed.Papers), len(parsed.Coauthors), parsed.Profile.HIndex)
 
 		mu.Lock()
 		parsedData = parsed

@@ -138,7 +138,7 @@ type LinkedInMoneyCard struct {
 	YearsOfExperience LinkedInYearsOfExperience `json:"years_of_experience"`
 	LevelUS           string                    `json:"level_us"`         // e.g. "L5"
 	LevelCN           string                    `json:"level_cn"`         // e.g. "P7"
-	EstimatedSalary   string                    `json:"estimated_salary"` // e.g. "200000-300000"
+	EstimatedSalary   int                       `json:"estimated_salary"` // e.g. 250000
 	Explanation       string                    `json:"explanation"`
 }
 

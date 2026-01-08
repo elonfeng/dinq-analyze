@@ -515,3 +515,158 @@ func (c *GitHubClient) FetchMultiYearPRContributions(ctx context.Context, login 
 
 	return contributions, nil
 }
+
+// mutationsQuery 查询用户仓库的commit数据来估算代码改动
+const mutationsQuery = `
+query($login: String!, $user_id: ID!) {
+    user(login: $login) {
+        repositories(isFork: false, ownerAffiliations: [OWNER], first: 10, orderBy: { field: CREATED_AT, direction: DESC }) {
+            totalCount
+            nodes {
+                name
+                languages(first: 3, orderBy: { field: SIZE, direction: DESC }) {
+                    edges {
+                        size
+                        node {
+                            name
+                        }
+                    }
+                }
+                defaultBranchRef {
+                    target {
+                        ... on Commit {
+                            history(first: 100, author: { id: $user_id }) {
+                                totalCount
+                                nodes {
+                                    additions
+                                    deletions
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+`
+
+// CommitMutations 提交代码改动统计
+type CommitMutations struct {
+	Additions int
+	Deletions int
+	Languages map[string]int
+}
+
+// FetchCommitMutations 获取用户仓库的commit代码改动统计
+func (c *GitHubClient) FetchCommitMutations(ctx context.Context, login string, userID string) (*CommitMutations, error) {
+	variables := map[string]interface{}{
+		"login":   login,
+		"user_id": userID,
+	}
+
+	data, err := c.query(ctx, mutationsQuery, variables)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		User struct {
+			Repositories struct {
+				TotalCount int `json:"totalCount"`
+				Nodes      []struct {
+					Name      string `json:"name"`
+					Languages struct {
+						Edges []struct {
+							Size int `json:"size"`
+							Node struct {
+								Name string `json:"name"`
+							} `json:"node"`
+						} `json:"edges"`
+					} `json:"languages"`
+					DefaultBranchRef *struct {
+						Target struct {
+							History struct {
+								TotalCount int `json:"totalCount"`
+								Nodes      []struct {
+									Additions int `json:"additions"`
+									Deletions int `json:"deletions"`
+								} `json:"nodes"`
+							} `json:"history"`
+						} `json:"target"`
+					} `json:"defaultBranchRef"`
+				} `json:"nodes"`
+			} `json:"repositories"`
+		} `json:"user"`
+	}
+
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal mutations data: %w", err)
+	}
+
+	totalRepoCount := result.User.Repositories.TotalCount
+	repos := result.User.Repositories.Nodes
+
+	var totalAdditions, totalDeletions int
+	totalLanguages := make(map[string]int)
+	delta := 0.85 // 与Python一致的系数
+
+	for _, repo := range repos {
+		if repo.DefaultBranchRef == nil {
+			continue
+		}
+
+		history := repo.DefaultBranchRef.Target.History
+		if len(history.Nodes) == 0 {
+			continue
+		}
+
+		var repoAdditions, repoDeletions int
+		for _, commit := range history.Nodes {
+			repoAdditions += commit.Additions
+			repoDeletions += commit.Deletions
+		}
+
+		// 按采样比例放大
+		commitCount := len(history.Nodes)
+		branchTotalCommits := history.TotalCount
+		if commitCount > 0 && branchTotalCommits > 0 {
+			scale := float64(branchTotalCommits) / float64(commitCount)
+			repoAdditions = int(float64(repoAdditions) * scale * delta)
+			repoDeletions = int(float64(repoDeletions) * scale * delta)
+		}
+
+		totalAdditions += repoAdditions
+		totalDeletions += repoDeletions
+
+		// 按语言分配
+		repoTotal := repoAdditions + repoDeletions
+		var langSizeSum int
+		for _, lang := range repo.Languages.Edges {
+			langSizeSum += lang.Size
+		}
+		if langSizeSum > 0 {
+			for _, lang := range repo.Languages.Edges {
+				ratio := float64(lang.Size) / float64(langSizeSum)
+				totalLanguages[lang.Node.Name] += int(float64(repoTotal) * ratio)
+			}
+		}
+	}
+
+	// 按仓库数量放大
+	sampleCount := len(repos)
+	if sampleCount > 0 && totalRepoCount > 0 {
+		scale := float64(totalRepoCount) / float64(sampleCount)
+		totalAdditions = int(float64(totalAdditions) * scale)
+		totalDeletions = int(float64(totalDeletions) * scale)
+		for name := range totalLanguages {
+			totalLanguages[name] = int(float64(totalLanguages[name]) * scale)
+		}
+	}
+
+	return &CommitMutations{
+		Additions: totalAdditions,
+		Deletions: totalDeletions,
+		Languages: totalLanguages,
+	}, nil
+}
