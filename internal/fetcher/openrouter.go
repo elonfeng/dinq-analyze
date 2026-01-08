@@ -490,7 +490,7 @@ CRITICAL: You must return a complete, valid JSON object.
 `, profile.Name, profile.Affiliation, profile.HIndex, profile.TotalCites)
 
 	reqBody := chatRequest{
-		Model: "perplexity/sonar-pro:online",
+		Model: "google/gemini-3-flash-preview:online",
 		Messages: []chatMessage{
 			{Role: "system", Content: "You are an expert at assessing researcher fame and recognition using real-time web search."},
 			{Role: "user", Content: prompt},
