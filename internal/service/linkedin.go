@@ -841,13 +841,12 @@ Return ONLY JSON.`,
 }
 
 // generateRoleModelCard 生成榜样卡片
-// Python逻辑: 当用户不是名人时，返回用户自己作为榜样
 func (s *LinkedInService) generateRoleModelCard(ctx context.Context, data *fetcher.LinkedInProfileData, personName string) (*model.LinkedInRoleModelCard, error) {
 	// 检查用户是否是名人
 	isCelebrity, celebrityReason := s.checkIfCelebrity(ctx, data, personName)
 
 	if isCelebrity {
-		// 如果用户是名人，返回自己作为榜样，带完整信息
+		// 如果用户是名人，返回自己作为榜样
 		return &model.LinkedInRoleModelCard{
 			Name:             personName,
 			Institution:      data.CompanyName,
@@ -860,20 +859,100 @@ func (s *LinkedInService) generateRoleModelCard(ctx context.Context, data *fetch
 		}, nil
 	}
 
-	// 用户不是名人时，生成一个关于为什么不是名人的解释
-	celebrityExplanation := s.generateCelebrityReasoning(ctx, data, personName)
+	// 用户不是名人时，从CSV名人列表中匹配最相似的
+	roleModel := s.findMatchingCelebrity(ctx, data, personName)
+	if roleModel != nil {
+		log.Printf("[LinkedIn RoleModel] Found matching celebrity: %s", roleModel.Name)
+		return roleModel, nil
+	}
 
-	// Python行为: 当用户不是名人时，返回用户自己作为榜样（空信息）
+	// 完全找不到匹配时，fallback到自己
+	log.Printf("[LinkedIn RoleModel] No matching celebrity found, using self")
+	celebrityExplanation := s.generateCelebrityReasoning(ctx, data, personName)
 	return &model.LinkedInRoleModelCard{
 		Name:             personName,
-		Institution:      "",
-		Position:         "",
-		PhotoURL:         "",
+		Institution:      data.CompanyName,
+		Position:         data.GetHeadline(),
+		PhotoURL:         data.GetPhotoURL(),
 		Achievement:      "Professional",
 		SimilarityReason: "You are already your own role model! Your unique career path and professional achievements make you an inspiration to others in your field.",
 		IsCelebrity:      false,
 		CelebrityReason:  celebrityExplanation,
 	}, nil
+}
+
+// findMatchingCelebrity 从CSV名人列表中找最相似的
+func (s *LinkedInService) findMatchingCelebrity(ctx context.Context, data *fetcher.LinkedInProfileData, personName string) *model.LinkedInRoleModelCard {
+	celebrities := fetcher.GetLinkedInCelebrities()
+	if len(celebrities) == 0 {
+		log.Printf("[LinkedIn RoleModel] No celebrities loaded from CSV")
+		return nil
+	}
+
+	// 构建用户profile摘要
+	userProfile := fmt.Sprintf("Name: %s, Position: %s, Company: %s, Industry: %s",
+		personName, data.GetHeadline(), data.CompanyName, data.CompanyIndustry)
+
+	// 构建名人列表
+	celebrityList := fetcher.FormatCelebritiesForPrompt()
+
+	prompt := fmt.Sprintf(`Based on this LinkedIn profile, find the MOST SIMILAR role model from the provided list.
+
+USER PROFILE:
+%s
+
+AVAILABLE ROLE MODELS:
+%s
+
+Return ONLY the exact name of the best matching role model from the list above. If no good match exists, return "NO_MATCH".`, userProfile, celebrityList)
+
+	response, err := s.chatWithAI(ctx, "You are an expert career advisor matching professionals with role models.", prompt)
+	if err != nil {
+		log.Printf("[LinkedIn RoleModel] AI matching failed: %v", err)
+		return nil
+	}
+
+	response = strings.TrimSpace(response)
+	response = strings.Trim(response, `"`)
+
+	if response == "NO_MATCH" || response == "" {
+		return nil
+	}
+
+	// 查找匹配的名人
+	celebrity := fetcher.FindCelebrityByName(response)
+	if celebrity == nil {
+		log.Printf("[LinkedIn RoleModel] AI returned '%s' but not found in CSV", response)
+		return nil
+	}
+
+	// 生成相似原因
+	similarityReason := s.generateSimilarityReason(ctx, data, personName, celebrity)
+
+	return &model.LinkedInRoleModelCard{
+		Name:             celebrity.Name,
+		Institution:      celebrity.Company,
+		Position:         celebrity.Title,
+		PhotoURL:         celebrity.PhotoURL,
+		Achievement:      celebrity.Remark,
+		SimilarityReason: similarityReason,
+		IsCelebrity:      false,
+		CelebrityReason:  "",
+	}
+}
+
+// generateSimilarityReason 生成相似性原因
+func (s *LinkedInService) generateSimilarityReason(ctx context.Context, data *fetcher.LinkedInProfileData, personName string, celebrity *fetcher.LinkedInCelebrity) string {
+	prompt := fmt.Sprintf(`Explain in 1-2 sentences why %s (%s at %s) is a good role model for %s (%s at %s).`,
+		celebrity.Name, celebrity.Title, celebrity.Company,
+		personName, data.GetHeadline(), data.CompanyName)
+
+	response, err := s.chatWithAI(ctx, "You are a career advisor.", prompt)
+	if err != nil {
+		return fmt.Sprintf("You share career similarities with %s as both are successful professionals in the technology industry.", celebrity.Name)
+	}
+
+	return strings.TrimSpace(strings.Trim(response, `"`))
 }
 
 // generateCelebrityReasoning 生成为什么用户不是名人的解释

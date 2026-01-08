@@ -386,3 +386,132 @@ func (c *GitHubClient) FetchPullRequests(ctx context.Context, login string) (*PR
 
 	return stats, nil
 }
+
+// prContributionsQuery PR贡献查询（按年）
+const prContributionsQuery = `
+query($login: String!, $from: DateTime!, $to: DateTime!) {
+    user(login: $login) {
+        contributionsCollection(from: $from, to: $to) {
+            pullRequestContributionsByRepository(maxRepositories: 10) {
+                contributions(orderBy: { direction: DESC }) {
+                    totalCount
+                }
+                repository {
+                    url
+                    name
+                    description
+                    owner { avatarUrl }
+                    stargazerCount
+                }
+            }
+        }
+    }
+}
+`
+
+// PRContribution PR贡献信息
+type PRContribution struct {
+	PullRequests int
+	Repository   GitHubRepo
+}
+
+// FetchMultiYearPRContributions 获取多年PR贡献（类似Python的most_pull_request_repositories）
+func (c *GitHubClient) FetchMultiYearPRContributions(ctx context.Context, login string, workExp int) ([]PRContribution, error) {
+	if workExp < 1 {
+		workExp = 1
+	}
+	if workExp > 10 {
+		workExp = 10 // 最多查10年
+	}
+
+	now := time.Now().UTC()
+	repoMap := make(map[string]*PRContribution)
+
+	// 并发查询每年的PR贡献
+	type yearResult struct {
+		contributions []struct {
+			Contributions struct{ TotalCount int } `json:"contributions"`
+			Repository    GitHubRepo               `json:"repository"`
+		}
+		err error
+	}
+
+	results := make(chan yearResult, workExp)
+
+	for i := 0; i < workExp; i++ {
+		go func(yearOffset int) {
+			to := now.AddDate(-yearOffset, 0, 0)
+			from := now.AddDate(-yearOffset-1, 0, 0)
+
+			variables := map[string]interface{}{
+				"login": login,
+				"from":  from.Format(time.RFC3339),
+				"to":    to.Format(time.RFC3339),
+			}
+
+			data, err := c.query(ctx, prContributionsQuery, variables)
+			if err != nil {
+				results <- yearResult{err: err}
+				return
+			}
+
+			var result struct {
+				User struct {
+					ContributionsCollection struct {
+						PRContributions []struct {
+							Contributions struct{ TotalCount int } `json:"contributions"`
+							Repository    GitHubRepo               `json:"repository"`
+						} `json:"pullRequestContributionsByRepository"`
+					} `json:"contributionsCollection"`
+				} `json:"user"`
+			}
+			if err := json.Unmarshal(data, &result); err != nil {
+				results <- yearResult{err: err}
+				return
+			}
+
+			results <- yearResult{contributions: result.User.ContributionsCollection.PRContributions}
+		}(i)
+	}
+
+	// 收集结果
+	for i := 0; i < workExp; i++ {
+		yr := <-results
+		if yr.err != nil {
+			continue // 忽略单年失败
+		}
+		for _, contrib := range yr.contributions {
+			url := contrib.Repository.URL
+			if existing, ok := repoMap[url]; ok {
+				existing.PullRequests += contrib.Contributions.TotalCount
+			} else {
+				repoMap[url] = &PRContribution{
+					PullRequests: contrib.Contributions.TotalCount,
+					Repository:   contrib.Repository,
+				}
+			}
+		}
+	}
+
+	// 转换为slice并排序
+	contributions := make([]PRContribution, 0, len(repoMap))
+	for _, c := range repoMap {
+		contributions = append(contributions, *c)
+	}
+
+	// 按PR数量降序排序
+	for i := 0; i < len(contributions)-1; i++ {
+		for j := i + 1; j < len(contributions); j++ {
+			if contributions[j].PullRequests > contributions[i].PullRequests {
+				contributions[i], contributions[j] = contributions[j], contributions[i]
+			}
+		}
+	}
+
+	// 只返回前10个
+	if len(contributions) > 10 {
+		contributions = contributions[:10]
+	}
+
+	return contributions, nil
+}

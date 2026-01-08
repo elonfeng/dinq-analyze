@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +61,28 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 	// 构建基础数据
 	baseData := s.buildBaseData(userData)
 
+	// 计算工作年限用于多年PR查询
+	workExp := 1
+	if userData.CreatedAt != "" {
+		if createdAt, err := time.Parse(time.RFC3339, userData.CreatedAt); err == nil {
+			workExp = int(math.Ceil(float64(time.Since(createdAt).Hours()) / (24 * 365)))
+			if workExp < 1 {
+				workExp = 1
+			}
+		}
+	}
+
+	// 获取多年PR贡献（并发启动，后面等待）
+	multiYearPRsChan := make(chan []fetcher.PRContribution, 1)
+	go func() {
+		prs, err := s.githubClient.FetchMultiYearPRContributions(ctx, userData.Login, workExp)
+		if err != nil {
+			multiYearPRsChan <- nil
+		} else {
+			multiYearPRsChan <- prs
+		}
+	}()
+
 	// 发送profile card（第一个，同步，包含AI生成的标签）
 	w.SetAction(20, "Processing profile...")
 	profileCard := s.buildProfileCard(ctx, userData)
@@ -96,11 +117,12 @@ func (s *GitHubService) Analyze(ctx context.Context, login string, w *sse.GitHub
 		resultsMu.Unlock()
 	}()
 
-	// Top Projects card
+	// Top Projects card (等待多年PR数据)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		topProjectsCard := s.buildTopProjectsCard(userData)
+		multiYearPRs := <-multiYearPRsChan
+		topProjectsCard := s.buildTopProjectsCardFromPRs(multiYearPRs, userData)
 		w.SendCardDone(model.GitHubCardTopProjects, topProjectsCard)
 		resultsMu.Lock()
 		results[model.GitHubCardTopProjects] = topProjectsCard
@@ -372,13 +394,16 @@ func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData) *model.G
 		}
 	}
 
-	// 估算代码贡献和语言统计
-	var totalAdditions, totalDeletions int
-	languages := make(map[string]int)
+	// 估算代码贡献和语言统计（采样后按比例放大）
+	var sampleAdditions, sampleDeletions int
+	sampleLanguages := make(map[string]int)
+
+	sampleCount := len(user.PullRequestsTop.Nodes)
+	totalPRCount := user.PullRequests.TotalCount
 
 	for _, pr := range user.PullRequestsTop.Nodes {
-		totalAdditions += pr.Additions
-		totalDeletions += pr.Deletions
+		sampleAdditions += pr.Additions
+		sampleDeletions += pr.Deletions
 
 		// 按语言统计（按PR代码量比例分配）
 		prTotal := pr.Additions + pr.Deletions
@@ -389,8 +414,20 @@ func (s *GitHubService) buildActivityCard(user *fetcher.GitHubUserData) *model.G
 		if langSizeSum > 0 {
 			for _, lang := range pr.Repository.Languages.Edges {
 				ratio := float64(lang.Size) / float64(langSizeSum)
-				languages[lang.Node.Name] += int(float64(prTotal) * ratio)
+				sampleLanguages[lang.Node.Name] += int(float64(prTotal) * ratio)
 			}
+		}
+	}
+
+	// 按采样数估算总量（类似Python逻辑）
+	var totalAdditions, totalDeletions int
+	languages := make(map[string]int)
+	if sampleCount > 0 && totalPRCount > 0 {
+		scale := float64(totalPRCount) / float64(sampleCount)
+		totalAdditions = int(math.Round(float64(sampleAdditions) * scale))
+		totalDeletions = int(math.Round(float64(sampleDeletions) * scale))
+		for name, value := range sampleLanguages {
+			languages[name] = int(math.Round(float64(value) * scale))
 		}
 	}
 
@@ -450,45 +487,52 @@ func (s *GitHubService) buildFeatureProjectCard(ctx context.Context, user *fetch
 	}
 }
 
-// buildTopProjectsCard 构建top projects card
-func (s *GitHubService) buildTopProjectsCard(user *fetcher.GitHubUserData) *model.GitHubTopProjectsCard {
+// buildTopProjectsCardFromPRs 使用多年PR数据构建top projects card
+func (s *GitHubService) buildTopProjectsCardFromPRs(multiYearPRs []fetcher.PRContribution, user *fetcher.GitHubUserData) *model.GitHubTopProjectsCard {
 	card := &model.GitHubTopProjectsCard{
 		Projects: make([]model.GitHubTopProject, 0),
 	}
 
-	// 从PR贡献构建
-	prRepoMap := make(map[string]*model.GitHubTopProject)
-	for _, contrib := range user.ContributionsCollection.PRContributions {
-		repo := contrib.Repository
-		prRepoMap[repo.URL] = &model.GitHubTopProject{
-			PullRequests: contrib.Contributions.TotalCount,
-			Repository: &model.GitHubTopProjectRepo{
-				URL:            repo.URL,
-				Name:           repo.Name,
-				Description:    repo.Description,
-				Owner:          &model.GitHubRepoOwner{AvatarURL: repo.Owner.AvatarURL},
-				StargazerCount: repo.StargazerCount,
-			},
+	// 使用多年PR贡献数据（已排序）
+	if len(multiYearPRs) > 0 {
+		for _, pr := range multiYearPRs {
+			if len(card.Projects) >= 10 {
+				break
+			}
+			card.Projects = append(card.Projects, model.GitHubTopProject{
+				PullRequests: pr.PullRequests,
+				Repository: &model.GitHubTopProjectRepo{
+					URL:            pr.Repository.URL,
+					Name:           pr.Repository.Name,
+					Description:    pr.Repository.Description,
+					Owner:          &model.GitHubRepoOwner{AvatarURL: pr.Repository.Owner.AvatarURL},
+					StargazerCount: pr.Repository.StargazerCount,
+				},
+			})
 		}
 	}
 
-	// 按PR数排序
-	projects := make([]*model.GitHubTopProject, 0, len(prRepoMap))
-	for _, p := range prRepoMap {
-		projects = append(projects, p)
-	}
-	sort.Slice(projects, func(i, j int) bool {
-		return projects[i].PullRequests > projects[j].PullRequests
-	})
-
-	for _, p := range projects {
-		if len(card.Projects) >= 10 {
-			break
+	// fallback: 用当年的PR贡献数据
+	if len(card.Projects) == 0 {
+		for _, contrib := range user.ContributionsCollection.PRContributions {
+			if len(card.Projects) >= 10 {
+				break
+			}
+			repo := contrib.Repository
+			card.Projects = append(card.Projects, model.GitHubTopProject{
+				PullRequests: contrib.Contributions.TotalCount,
+				Repository: &model.GitHubTopProjectRepo{
+					URL:            repo.URL,
+					Name:           repo.Name,
+					Description:    repo.Description,
+					Owner:          &model.GitHubRepoOwner{AvatarURL: repo.Owner.AvatarURL},
+					StargazerCount: repo.StargazerCount,
+				},
+			})
 		}
-		card.Projects = append(card.Projects, *p)
 	}
 
-	// 如果没有PR贡献项目，用自己的仓库填充
+	// fallback: 用自己的仓库
 	if len(card.Projects) == 0 {
 		for _, repo := range user.TopRepos.Nodes {
 			if len(card.Projects) >= 10 {
@@ -605,9 +649,11 @@ Return ONLY valid JSON with this exact structure:
 func (s *GitHubService) generateRoleModel(ctx context.Context, baseData map[string]interface{}) (*model.GitHubRoleModelCard, error) {
 	result, err := s.llmClient.GenerateGitHubRoleModel(ctx, baseData)
 	if err != nil {
+		log.Printf("[GitHub RoleModel] LLM FAILED: %v", err)
 		return nil, err
 	}
 
+	log.Printf("[GitHub RoleModel] OK: name=%s, github=%s", result.Name, result.GitHub)
 	return &model.GitHubRoleModelCard{
 		Name:            result.Name,
 		GitHub:          result.GitHub,
