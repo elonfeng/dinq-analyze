@@ -736,3 +736,110 @@ FINAL REMINDER: Be AGGRESSIVE in valuation. Exceptional open source contributors
 
 	return &result, nil
 }
+
+// SearchPaperNews 使用 Perplexity AI 搜索论文新闻（和 Python 版本逻辑一致）
+func (o *OpenRouterClient) SearchPaperNews(ctx context.Context, paperTitle string) (*PaperNewsResult, error) {
+	if paperTitle == "" {
+		return nil, fmt.Errorf("paper title is empty")
+	}
+
+	// 默认 fallback 结果
+	fallbackResult := &PaperNewsResult{
+		News:        "No recent news found for: " + paperTitle,
+		Date:        time.Now().Format("2006-01-02"),
+		Description: "Our systems could not locate verified news about this paper. This could be because the paper is very recent, highly specialized, or not widely covered in accessible sources.",
+		URL:         "",
+		IsFallback:  true,
+	}
+
+	prompt := fmt.Sprintf(`Find the latest news, social media discussions, or academic mentions about this paper with title: %s.
+
+IMPORTANT:
+- Only return REAL, VERIFIABLE news or mentions
+- The date MUST NOT be later than today's date
+- You MUST return a valid JSON response in ALL cases
+- If you cannot find reliable information, still return the JSON format with appropriate message
+
+Please return the information in the following JSON format:
+{
+    "news": "title or headline of the news/mention",
+    "date": "YYYY-MM-DD format",
+    "description": "brief description or summary",
+    "url": "direct link to the source"
+}
+
+If multiple news items exist, return the most recent and verified one.
+If NO news is found, still return the JSON with "news" field containing "No recent news found" and appropriate description.`, paperTitle)
+
+	// 使用 Gemini 在线搜索模型
+	reqBody := chatRequest{
+		Model: "google/gemini-3-flash-preview:online",
+		Messages: []chatMessage{
+			{Role: "user", Content: prompt},
+		},
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return fallbackResult, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fallbackResult, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+o.apiKey)
+	req.Header.Set("HTTP-Referer", "https://dinq.io")
+	req.Header.Set("X-Title", "Dinq Analyze")
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return fallbackResult, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fallbackResult, fmt.Errorf("perplexity returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var chatResp chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		return fallbackResult, err
+	}
+
+	if len(chatResp.Choices) == 0 {
+		return fallbackResult, nil
+	}
+
+	// 解析 JSON 响应
+	responseText := chatResp.Choices[0].Message.Content
+	jsonStr := extractJSON(responseText)
+
+	var newsResult struct {
+		News        string `json:"news"`
+		Date        string `json:"date"`
+		Description string `json:"description"`
+		URL         string `json:"url"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &newsResult); err != nil {
+		return fallbackResult, nil
+	}
+
+	// 检查是否找到真实新闻
+	newsLower := strings.ToLower(newsResult.News)
+	if newsResult.News == "" || strings.Contains(newsLower, "no ") || strings.Contains(newsLower, "not found") {
+		return fallbackResult, nil
+	}
+
+	return &PaperNewsResult{
+		News:        newsResult.News,
+		Date:        newsResult.Date,
+		Description: newsResult.Description,
+		URL:         newsResult.URL,
+		IsFallback:  false,
+	}, nil
+}

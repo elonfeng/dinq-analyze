@@ -550,34 +550,29 @@ func (s *ScholarService) sendCachedResults(ctx context.Context, w *sse.Writer, d
 	return nil
 }
 
-// searchPaperNews 搜索论文相关新闻
+// searchPaperNews 使用 Perplexity AI 搜索论文相关新闻（和 Python 版本逻辑一致）
 func (s *ScholarService) searchPaperNews(ctx context.Context, paperTitle string) *model.PaperNews {
 	if paperTitle == "" {
 		return nil
 	}
 
-	results, err := s.searchFetcher.SearchNews(ctx, paperTitle, 1)
-	if err != nil || len(results) == 0 {
-		// 返回fallback
+	// 使用 LLM 的 Perplexity 搜索方法
+	result, err := s.llmClient.SearchPaperNews(ctx, paperTitle)
+	if err != nil || result == nil {
+		// 返回 fallback
 		return &model.PaperNews{
 			News:        "No recent news found for: " + paperTitle,
-			Date:        "",
+			Date:        time.Now().Format("2006-01-02"),
 			Description: "Our systems could not locate verified news about this paper. This could be because the paper is very recent, highly specialized, or not widely covered in accessible sources.",
 			IsFallback:  true,
 		}
 	}
 
-	// 用 LLM 总结 snippet
-	description := results[0].Snippet
-	if summarized, err := s.llmClient.SummarizePaperNews(ctx, paperTitle, results[0].Snippet); err == nil && summarized != "" {
-		description = summarized
-	}
-
 	return &model.PaperNews{
-		News:        results[0].Title,
-		Date:        results[0].Date,
-		Description: description,
-		URL:         results[0].URL,
-		IsFallback:  false,
+		News:        result.News,
+		Date:        result.Date,
+		Description: result.Description,
+		URL:         result.URL,
+		IsFallback:  result.IsFallback,
 	}
 }

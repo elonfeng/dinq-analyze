@@ -318,19 +318,8 @@ func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, cand
 	wg.Wait()
 
 	// Step 6: 构建完整的profile_data (matches Python output)
-	// 直接使用原始数据，保留所有字段
-	rawProfile := s.buildFullRawProfile(profileData, linkedinURL)
-
-	// 获取头像URL（优先使用profileData，回退到rawProfile）
+	// 获取头像URL
 	avatarURL := profileData.GetPhotoURL()
-	if avatarURL == "" {
-		// 尝试从rawProfile获取
-		if pic, ok := rawProfile["profilePicHighQuality"].(string); ok && pic != "" {
-			avatarURL = pic
-		} else if pic, ok := rawProfile["profilePic"].(string); ok && pic != "" {
-			avatarURL = pic
-		}
-	}
 	log.Printf("[LinkedIn] Avatar URL: %s", avatarURL)
 
 	// 收集所有卡片结果用于缓存
@@ -348,9 +337,10 @@ func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, cand
 		"personal_tags":    personalTags,
 		"work_exp_summary": workExpSummary,
 		"edu_summary":      eduSummary,
-		"raw_profile":      rawProfile,
 		"person_name":      personName,
 		"avatar":           avatarURL,
+		"experiences":      profileData.Experiences,
+		"educations":       profileData.Educations,
 	}
 	mu.Unlock()
 
@@ -364,13 +354,12 @@ func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, cand
 		LifeWellBeing:         lifeResult,
 		About:                 about,
 		PersonalTags:          personalTags,
-		WorkExperience:        rawProfile["experiences"], // 直接使用原始数据
+		WorkExperience:        profileData.Experiences,
 		WorkExperienceSummary: workExpSummary,
-		Education:             rawProfile["educations"], // 直接使用原始数据
+		Education:             profileData.Educations,
 		EducationSummary:      eduSummary,
 		Avatar:                avatarURL,
 		Name:                  personName,
-		RawProfile:            rawProfile,
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1403,11 +1392,12 @@ func (s *LinkedInService) sendCachedResult(w *sse.LinkedInWriter, data map[strin
 	}
 
 	// 获取缓存的数据
-	rawProfile, _ := data["raw_profile"].(map[string]interface{})
 	about, _ := data["about"].(string)
 	personalTags, _ := data["personal_tags"].([]interface{})
 	workExpSummary, _ := data["work_exp_summary"].(string)
 	eduSummary, _ := data["edu_summary"].(string)
+	experiences := data["experiences"]
+	educations := data["educations"]
 
 	// 转换personal_tags为[]string
 	var tags []string
@@ -1417,16 +1407,10 @@ func (s *LinkedInService) sendCachedResult(w *sse.LinkedInWriter, data map[strin
 		}
 	}
 
-	// 获取avatar（优先使用缓存的avatar，回退到rawProfile）
+	// 获取avatar
 	var avatar interface{}
 	if cachedAvatar, ok := data["avatar"].(string); ok && cachedAvatar != "" {
 		avatar = cachedAvatar
-	} else if rawProfile != nil {
-		if pic, ok := rawProfile["profilePicHighQuality"].(string); ok && pic != "" {
-			avatar = pic
-		} else if pic, ok := rawProfile["profilePic"].(string); ok && pic != "" {
-			avatar = pic
-		}
 	}
 
 	// 构建最终结果
@@ -1440,13 +1424,12 @@ func (s *LinkedInService) sendCachedResult(w *sse.LinkedInWriter, data map[strin
 		LifeWellBeing:         getTypedValue[*model.LinkedInLifeWellBeingCard](data, "life_well_being"),
 		About:                 about,
 		PersonalTags:          tags,
-		WorkExperience:        rawProfile["experiences"],
+		WorkExperience:        experiences,
 		WorkExperienceSummary: workExpSummary,
-		Education:             rawProfile["educations"],
+		Education:             educations,
 		EducationSummary:      eduSummary,
 		Avatar:                avatar,
 		Name:                  personName,
-		RawProfile:            rawProfile,
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1497,41 +1480,4 @@ func getStringValue(data map[string]interface{}, key string) string {
 		}
 	}
 	return ""
-}
-
-// buildFullRawProfile 构建完整的原始profile数据（使用Apify返回的完整数据）
-func (s *LinkedInService) buildFullRawProfile(data *fetcher.LinkedInProfileData, linkedinURL string) map[string]interface{} {
-	// 如果有原始数据，直接使用
-	if data.RawData != nil {
-		rawProfile := data.RawData
-		// 确保linkedinUrl字段存在
-		if _, ok := rawProfile["linkedinUrl"]; !ok {
-			rawProfile["linkedinUrl"] = linkedinURL
-		}
-		return rawProfile
-	}
-
-	// 回退到手动构建（通常不会走到这里）
-	return map[string]interface{}{
-		"linkedinUrl":           linkedinURL,
-		"firstName":             data.FirstName,
-		"lastName":              data.LastName,
-		"fullName":              data.GetFullName(),
-		"headline":              data.GetHeadline(),
-		"connections":           data.Connections,
-		"followers":             data.Followers,
-		"jobTitle":              data.JobTitle,
-		"companyName":           data.CompanyName,
-		"companyIndustry":       data.CompanyIndustry,
-		"companySize":           data.CompanySize,
-		"addressWithCountry":    data.AddressWithCountry,
-		"profilePic":            data.ProfilePic,
-		"profilePicHighQuality": data.ProfilePicHighQuality,
-		"linkedinId":            data.LinkedInID,
-		"about":                 data.About,
-		"experiences":           data.Experiences,
-		"educations":            data.Educations,
-		"skills":                data.Skills,
-		"languages":             data.Languages,
-	}
 }

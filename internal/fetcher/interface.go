@@ -21,6 +21,16 @@ type LLMClient interface {
 	GenerateRoast(ctx context.Context, profile ProfileData) (string, error)
 	SummarizeContent(ctx context.Context, text string) (string, error)
 	SummarizePaperNews(ctx context.Context, paperTitle, rawSnippet string) (string, error)
+	SearchPaperNews(ctx context.Context, paperTitle string) (*PaperNewsResult, error)
+}
+
+// PaperNewsResult 论文新闻结果
+type PaperNewsResult struct {
+	News        string `json:"news"`
+	Date        string `json:"date"`
+	Description string `json:"description"`
+	URL         string `json:"url,omitempty"`
+	IsFallback  bool   `json:"is_fallback"`
 }
 
 // NewsResult 新闻搜索结果

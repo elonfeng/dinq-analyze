@@ -271,7 +271,6 @@ type LinkedInProfileData struct {
 	EducationSummary      string                     `json:"education_summary,omitempty"`
 	Avatar                interface{}                `json:"avatar"` // 可能为null
 	Name                  string                     `json:"name,omitempty"`
-	RawProfile            map[string]interface{}     `json:"raw_profile,omitempty"`
 }
 
 // ========== Complete Result (matches Python final output) ==========
