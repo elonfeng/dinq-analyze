@@ -1009,7 +1009,9 @@ USER PROFILE:
 AVAILABLE ROLE MODELS:
 %s
 
-Return ONLY the exact name of the best matching role model from the list above. If no good match exists, return "NO_MATCH".`, userProfile, celebrityList)
+You MUST pick one role model from the list - there is always someone who can serve as inspiration.
+Consider matching by: industry, role type (PM, engineer, founder, investor), company tier, or career trajectory.
+Return ONLY the exact name of the best matching role model from the list above.`, userProfile, celebrityList)
 
 	response, err := s.chatWithAI(ctx, "You are an expert career advisor matching professionals with role models.", prompt)
 	if err != nil {
@@ -1019,6 +1021,7 @@ Return ONLY the exact name of the best matching role model from the list above. 
 
 	response = strings.TrimSpace(response)
 	response = strings.Trim(response, `"`)
+	log.Printf("[LinkedIn RoleModel] AI returned: '%s'", response)
 
 	if response == "NO_MATCH" || response == "" {
 		return nil
