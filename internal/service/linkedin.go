@@ -376,17 +376,13 @@ func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, cand
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	finalResult := &model.LinkedInFinalResponse{
-		Type:    "success",
-		Message: "LinkedIn analysis completed",
-		Data: &model.LinkedInAnalysisResult{
-			LinkedInID:  linkedinID,
-			PersonName:  personName,
-			LinkedInURL: linkedinURL,
-			ProfileData: finalProfileData,
-			LastUpdated: now,
-			CreatedAt:   now,
-		},
+	finalResult := &model.LinkedInAnalysisResult{
+		LinkedInID:  linkedinID,
+		PersonName:  personName,
+		LinkedInURL: linkedinURL,
+		ProfileData: finalProfileData,
+		LastUpdated: now,
+		CreatedAt:   now,
 	}
 
 	// 缓存结果 (使用linkedinURL作为key)
@@ -398,9 +394,7 @@ func (s *LinkedInService) AnalyzeWithSSE(ctx context.Context, query string, cand
 		}
 	}
 
-	// 先发送完成状态
-	w.SendCompleted()
-	// 再发送最终结果
+	// 发送最终结果（包含completed状态）
 	return w.SendFinalResult(finalResult)
 }
 
@@ -1446,20 +1440,16 @@ func (s *LinkedInService) sendCachedResult(w *sse.LinkedInWriter, data map[strin
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	finalResult := &model.LinkedInFinalResponse{
-		Type:    "success",
-		Message: "LinkedIn analysis completed (from cache)",
-		Data: &model.LinkedInAnalysisResult{
-			LinkedInID:  linkedinID,
-			PersonName:  personName,
-			LinkedInURL: linkedinURL,
-			ProfileData: finalProfileData,
-			LastUpdated: now,
-			CreatedAt:   now,
-		},
+	finalResult := &model.LinkedInAnalysisResult{
+		LinkedInID:  linkedinID,
+		PersonName:  personName,
+		LinkedInURL: linkedinURL,
+		ProfileData: finalProfileData,
+		LastUpdated: now,
+		CreatedAt:   now,
 	}
 
-	w.SendCompleted()
+	// 发送最终结果（包含completed状态）
 	return w.SendFinalResult(finalResult)
 }
 

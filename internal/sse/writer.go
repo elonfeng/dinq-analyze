@@ -537,32 +537,16 @@ func (l *LinkedInWriter) SendLoginRequired(message string) error {
 	return l.send()
 }
 
-// SendCompleted 发送完成
-func (l *LinkedInWriter) SendCompleted() error {
+// SendFinalResult 发送最终结果（包含completed状态，一条消息搞定）
+func (l *LinkedInWriter) SendFinalResult(result *model.LinkedInAnalysisResult) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.state.Status = "completed"
 	l.state.Overall = 100
 	l.state.CurrentAction = "Analysis completed"
+	l.state.Result = result
 	return l.send()
-}
-
-// SendFinalResult 发送最终结果 (matches Python final output format)
-func (l *LinkedInWriter) SendFinalResult(result *model.LinkedInFinalResponse) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(l.w, "data: %s\n\n", data)
-	if err != nil {
-		return err
-	}
-	l.flusher.Flush()
-	return nil
 }
 
 // recalcOverall 根据完成的card数量计算进度

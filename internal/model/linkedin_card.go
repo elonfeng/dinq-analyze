@@ -79,14 +79,15 @@ type LinkedInCandidate struct {
 
 // LinkedInAnalysisState LinkedIn分析状态
 type LinkedInAnalysisState struct {
-	Status        string              `json:"status"`               // "analyzing" | "need_selection" | "completed" | "error"
-	LinkedInID    string              `json:"linkedin_id"`          // LinkedIn用户名
-	PersonName    string              `json:"person_name"`          // 姓名
-	Overall       int                 `json:"overall"`              // 整体进度 0-100
-	CurrentAction string              `json:"current_action"`       // 当前动作
-	Candidates    []LinkedInCandidate `json:"candidates,omitempty"` // 候选人列表（需要选择时）
-	Cards         *LinkedInCardMap    `json:"cards"`                // 所有card状态
-	Error         string              `json:"error,omitempty"`
+	Status        string                  `json:"status"`               // "analyzing" | "need_selection" | "completed" | "error" | "login_required"
+	LinkedInID    string                  `json:"linkedin_id"`          // LinkedIn用户名
+	PersonName    string                  `json:"person_name"`          // 姓名
+	Overall       int                     `json:"overall"`              // 整体进度 0-100
+	CurrentAction string                  `json:"current_action"`       // 当前动作
+	Candidates    []LinkedInCandidate     `json:"candidates,omitempty"` // 候选人列表（需要选择时）
+	Cards         *LinkedInCardMap        `json:"cards"`                // 所有card状态
+	Error         string                  `json:"error,omitempty"`
+	Result        *LinkedInAnalysisResult `json:"result,omitempty"` // 最终结果（completed时包含）
 }
 
 // NewLinkedInAnalysisState 创建初始状态
@@ -283,11 +284,4 @@ type LinkedInAnalysisResult struct {
 	ProfileData *LinkedInProfileData `json:"profile_data"`
 	LastUpdated string               `json:"last_updated"`
 	CreatedAt   string               `json:"created_at"`
-}
-
-// LinkedInFinalResponse 最终SSE响应 (matches Python final SSE message)
-type LinkedInFinalResponse struct {
-	Type    string                  `json:"type"`
-	Message string                  `json:"message"`
-	Data    *LinkedInAnalysisResult `json:"data"`
 }
